@@ -5,6 +5,7 @@
 #include "ui/FluxLookAndFeel.h"
 #include "ui/ModContext.h"
 #include "ui/ParamControl.h"
+#include "ui/PresetBar.h"
 #include "ui/Sections.h"
 #include "ui/SourceModules.h"
 
@@ -35,6 +36,7 @@ private:
         void resized() override;
         flux::ui::ModContext ctx;
     private:
+        flux::ui::PresetBar presetBar;
         flux::ui::FieldView fieldView;
         flux::ui::ParamSection cells { "Cells", 3 }, character { "Character", 2 };
         flux::ui::FluxSection flux;

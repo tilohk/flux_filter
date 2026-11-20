@@ -66,7 +66,7 @@ struct FastRandom
 class FluxField
 {
 public:
-    static constexpr int maxCells = 24;
+    static constexpr int maxCells = 16;   // matches the Density parameter
     static constexpr int maxChannels = 2;
     static constexpr int controlInterval = 32;
     static constexpr float wetCeiling = 4.0f, invWetCeiling = 1.0f / wetCeiling;

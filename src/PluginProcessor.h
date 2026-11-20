@@ -5,6 +5,7 @@
 
 #include "dsp/FluxField.h"
 #include "params/ParamSpec.h"
+#include "presets/PresetManager.h"
 
 class FluxFilterAudioProcessor : public juce::AudioProcessor
 {
@@ -28,10 +29,11 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 2.0; } // high resonance rings
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    // Host programs = the factory presets.
+    int getNumPrograms() override { return presets.numFactory(); }
+    int getCurrentProgram() override { return juce::jlimit (0, presets.numFactory() - 1, presets.getCurrent()); }
+    void setCurrentProgram (int index) override { if (index >= 0 && index < presets.numFactory()) presets.load (index); }
+    const juce::String getProgramName (int index) override { return index < presets.numFactory() ? presets.nameOf (index) : juce::String(); }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -60,6 +62,7 @@ public:
    #endif
 
     juce::AudioProcessorValueTreeState apvts;
+    flux::PresetManager presets { apvts };
 
 private:
     flux::FieldSettings readSettings() const noexcept;

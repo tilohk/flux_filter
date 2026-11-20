@@ -41,6 +41,8 @@ target_sources(FluxFilter PRIVATE
         src/ui/ModContext.h
         src/ui/SourceModules.h
         src/ui/Sections.h
+        src/ui/PresetBar.h
+        src/presets/PresetManager.h
 )
 
 target_include_directories(FluxFilter PRIVATE src)
@@ -70,3 +72,9 @@ target_compile_features(FluxFieldTest PRIVATE cxx_std_20)
 add_executable(FluxModTest tests/ModTest.cpp)
 target_include_directories(FluxModTest PRIVATE src)
 target_compile_features(FluxModTest PRIVATE cxx_std_20)
+
+# CPU benchmark: build it optimised for meaningful numbers.
+add_executable(FluxBenchmark tests/Benchmark.cpp)
+target_include_directories(FluxBenchmark PRIVATE src)
+target_compile_features(FluxBenchmark PRIVATE cxx_std_20)
+target_compile_options(FluxBenchmark PRIVATE -O2)

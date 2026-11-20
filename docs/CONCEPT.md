@@ -73,15 +73,22 @@ Mod: LFO 1–3 (rate, sync, division, shape, unipolar, flux), 16 connections × 
 - Live data reaches the UI lock-free: atomics for cell frequency/Q/level, mod source values and meter peaks; a FIFO for the input samples.
 - Dev aid (debug builds only): run the Standalone with `FLUXFILTER_UI_SNAPSHOT=<dir>` to render the panel to `ui_panel.png` (`FLUXFILTER_UI_DEMO=1` adds a few demo connections first).
 
-## 6. Code structure (to build)
+## 5c. Presets (built in phase 6)
+- **Factory presets** (in code, only the values that differ from the defaults): Init, Breathing Vowels, Slow Tide, Glass Rain, Deep Body, Broken Radio, Singing Drone, Ripple Sweep, Notch Phaser, Tempo Pulse. They are also the host's programs (AU factory presets, VST3 programs).
+- **User presets:** the full state as XML in `~/Library/Audio/Presets/Tilo Hauk/flux_filter/<name>.fluxpreset`.
+- **Preset bar** in the header (left): previous / list (Factory and User sections) / next, and SAVE (asks for a name; the same name overwrites). The preset name is stored with the project.
+- Debug builds check that every factory preset only names existing parameters and in-range values.
+
+## 6. Code structure
 ```
 src/
   PluginProcessor.*        // APVTS, process loop, state save/load
   PluginEditor.*           // the single panel and its layout / scaling
+  presets/PresetManager.h  // factory presets, user preset files, host programs
   ui/                      // look and feel, knobs with mod rings, field + spectrum display, flux/output sections,
-                           // LFO modules, modulation panel, ModContext (drag and drop, connections)
+                           // LFO modules, modulation panel, preset bar, ModContext (drag and drop, connections)
   dsp/FluxCell.h           // nonlinear ZDF SVF with morph
-  dsp/FluxField.h/.cpp     // cell array, placement scales, combine modes, feedback
+  dsp/FluxField.h          // cell array (max 16), placement, feedback, auto gain, safety
   dsp/FluxPropagator.h     // per-cell mod delay + viscosity smoothing + turbulence
   mod/ModSources.h         // LFO
   mod/ModMatrix.h          // connection slots, routing, flux propagation, control-rate evaluation
@@ -97,13 +104,18 @@ Use JUCE `AudioProcessorValueTreeState`, `juce::dsp` utilities (SmoothedValue, P
 4. **Mod sources + matrix:** LFOs (with shape data), env follower, chaos, drift, macros, 16 slots, state save/load.
 5. **Simple UI:** grouped knobs, a live field visualizer (bars per cell showing cutoff/level — cheap and very useful), matrix as a table, basic curve editor for LFOs.
 5b. **UI and workflow rework:** one panel, big Flux knob, drag-and-drop modulation with rings and a depth panel, analog LFOs with a Flux amount and polarity each, output spectrum, output meters with clip LEDs beside the display; envelope, macros, chaos, drift, wobble, scale and curve editor removed.
-6. **Polish:** presets, CPU optimizations (SIMD cells, control-rate tuning), pluginval.
+6. **Polish:** presets (factory + user, preset bar, host programs), CPU check (no optimisation needed, see below), pluginval at strictness 10 on VST3 and AU.
 
 ## Verification
 - Build in CLion / `cmake --build cmake-build-debug`, run Standalone with test audio (noise, drums, pads).
 - Check stability: max resonance + feedback + fast modulation, no NaN/blowups (add debug assertion on output).
-- CPU check at 24 cells, 96 kHz.
-- `pluginval --strictness-level 5` on VST3 + AU and `auval`, as with audible_spec; test in Ableton Live 12.
+- CPU: `FluxBenchmark` (tests/Benchmark.cpp, -O2), stereo, block 256, % of one core (Apple Silicon, phase 6):
+  | | 8 cells | 16 cells | 16 cells + 16 connections |
+  |---|---|---|---|
+  | 48 kHz | 0.8 % | 1.1 % | 1.3 % |
+  | 96 kHz | 1.2 % | 2.0 % | 2.4 % |
+- pluginval on VST3 + AU: passes at strictness 10 (phase 6). The AU shows only the warning "Current program is -1" (no preset selected yet), which is harmless. `auval` passes. Still to do by hand: test in Ableton Live 12.
+- Switch parameters are snapped to exactly 0/1 after a state restore (pluginval sets in-between values that JUCE's replaceState would otherwise skip).
 - Automation + state recall (save/reload project, mod matrix restored).
 
 ## Open later (not v1)

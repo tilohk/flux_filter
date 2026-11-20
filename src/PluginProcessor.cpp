@@ -197,6 +197,15 @@ void FluxFilterAudioProcessor::setStateInformation (const void* data, int sizeIn
     auto state = juce::ValueTree::fromXml (*xml);
     state.removeChild (state.getChildWithName ("LfoShapes"), nullptr);   // drawn shapes from older versions
     apvts.replaceState (state);
+
+    // A switch can hold an in-between normalised value (e.g. 0.79 = on) that replaceState then
+    // skips because the plain value already matches; snap switches to exactly 0 or 1.
+    for (auto* p : getParameters())
+        if (dynamic_cast<juce::AudioParameterBool*> (p) != nullptr)
+            if (const float v = p->getValue(); v > 0.0f && v < 1.0f)
+                p->setValueNotifyingHost (v >= 0.5f ? 1.0f : 0.0f);
+
+    presets.syncFromState();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

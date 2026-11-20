@@ -15,7 +15,7 @@ namespace
 
 // ---------------------------------------------------------------------------------------------
 FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
-    : ctx (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
+    : ctx (p), presetBar (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
 {
     cells.add (ctx, params::id::density, "Density");
     cells.add (ctx, id (FP::Center), "Center");
@@ -32,7 +32,7 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
     for (int i = 0; i < ModSettings::numLfos; ++i)
         addAndMakeVisible (*lfos.emplace_back (std::make_unique<LfoModule> (ctx, i)));
 
-    for (auto* c : std::initializer_list<juce::Component*> { &fieldView, &cells, &character, &flux, &output, &modPanel })
+    for (auto* c : std::initializer_list<juce::Component*> { &presetBar, &fieldView, &cells, &character, &flux, &output, &modPanel })
         addAndMakeVisible (c);
 }
 
@@ -42,18 +42,22 @@ void FluxFilterAudioProcessorEditor::Panel::paint (juce::Graphics& g)
 
     // Same caption as audible_spec (Avenir Next Demi Bold 25, right-aligned), in the flux colour.
     const auto header = getLocalBounds().withTrimmedTop (headerTop).removeFromTop (headerH).reduced (margin, 0);
+    const juce::Font titleFont (juce::FontOptions().withName ("Avenir Next").withStyle ("Demi Bold").withHeight (25.0f));
     g.setColour (colours::flux);
-    g.setFont (juce::FontOptions().withName ("Avenir Next").withStyle ("Demi Bold").withHeight (25.0f));
+    g.setFont (titleFont);
     g.drawText (JucePlugin_Name, header, juce::Justification::centredRight);
 
+    // Version, just left of the title.
+    const int titleW = (int) std::ceil (juce::GlyphArrangement::getStringWidth (titleFont, JucePlugin_Name));
     g.setColour (colours::dim);
     g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("v" JucePlugin_VersionString, header, juce::Justification::centredLeft);
+    g.drawText ("v" JucePlugin_VersionString, header.withTrimmedRight (titleW + 10), juce::Justification::centredRight);
 }
 
 void FluxFilterAudioProcessorEditor::Panel::resized()
 {
     auto r = getLocalBounds().reduced (margin, 0);
+    presetBar.setBounds (r.getX(), headerTop, 330, headerH);
     r.removeFromTop (headerTop + headerH + gap);
     r.removeFromBottom (margin);
 
@@ -104,6 +108,11 @@ FluxFilterAudioProcessorEditor::FluxFilterAudioProcessorEditor (FluxFilterAudioP
     {
         if (juce::SystemStats::getEnvironmentVariable ("FLUXFILTER_UI_DEMO", {}).isNotEmpty())
         {
+            // Every factory preset must load cleanly (assertions fire on unknown IDs or out-of-range values).
+            for (int i = 0; i < p.presets.numFactory(); ++i)
+                p.presets.load (i);
+            p.presets.load (1);
+
             panel.ctx.connect (ModSource::Lfo1, ModTarget::Cutoff, 0.2f);
             panel.ctx.connect (ModSource::Lfo3, ModTarget::Cutoff, -0.1f);
             panel.ctx.connect (ModSource::Lfo2, ModTarget::Resonance, 0.2f);
