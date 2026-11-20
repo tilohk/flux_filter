@@ -9,8 +9,7 @@ namespace flux
 enum class LfoShape { Sine = 0, Triangle, Ramp, Random };
 
 // The built-in flux LFO, evaluated at control rate. Output is bipolar -1..1.
-// Phase 4 replaces this with the full mod sources (drawable LFOs, envelope, chaos, drift);
-// it stays the default source that drives the wave.
+// It drives the main flux wave; LFO 1-3 (mod/ModSources.h) are the user's modulation sources.
 class FluxLfo
 {
 public:

@@ -64,8 +64,8 @@ int main()
                 s.density = 24; s.resonance = 1.0f; s.driveDb = 24.0f; s.combine = combine;
                 s.scale = (CellScale) scale; s.tiltDbOct = 12.0f;
                 s.character = (Character) character; s.limiter = limiter;
-                s.feedback = 1.0f; s.drift = 1.0f; s.damping = 0.0f;
-                s.fluxDepth = 3.0f; s.fluxLevel = 1.0f; s.fluxRateHz = 20.0f; s.fluxShape = LfoShape::Random;
+                s.feedback = 1.0f; s.damping = 0.0f;
+                s.fluxAmount = 1.0f; s.fluxRateHz = 20.0f; s.fluxShape = LfoShape::Random;
                 s.propagation.turbulence = 1.0f; s.propagation.wavelength = 4.0f; s.propagation.stereo = 1.0f;
                 f.setSettings (s); f.prepare (sr);
 
@@ -96,7 +96,7 @@ int main()
     // 2. Resonant peaks sit on the cells: a sine on a cell passes louder than one between cells.
     {
         FieldSettings s; s.density = 8; s.centerHz = 1000.0f; s.spread = 4.0f; s.resonance = 0.85f;
-        s.morph = 1.0f; s.width = 0.0f; s.drift = 0.0f; s.autoGain = false; s.fluxDepth = 0.0f;
+        s.morph = 1.0f; s.width = 0.0f; s.autoGain = false; s.fluxAmount = 0.0f;
         FluxField probe; probe.setSettings (s); probe.prepare (sr);
         std::vector<float> tmp (64, 0.0f); probe.process (tmp.data(), nullptr, 64);
         const float onCell = probe.getCellFrequency (3);
@@ -135,16 +135,16 @@ int main()
             auto w = noise (48000 * 3, 0.3f); const double inRms = rmsTail (w); run (g, w, nullptr);
             const double ratioDb = 20.0 * std::log10 (rmsTail (w) / inRms);
             std::printf ("default settings on noise, auto gain %s: %.1f dB vs input\n", ag ? "on " : "off", ratioDb);
-            if (ag) CHECK (std::abs (ratioDb) < 3.0, "auto gain misses input level: %.1f dB", ratioDb);
+            if (ag) CHECK (ratioDb < 0.0 && ratioDb > -6.0, "auto gain should sit ~3 dB under the input: %.1f dB", ratioDb);
             else    CHECK (ratioDb > -24.0 && ratioDb < 12.0, "default level off: %.1f dB", ratioDb);
         }
     }
 
-    // 5. Drift: cells wander when on, stay put when off.
+    // 5. Without flux or modulation the cells stay exactly where they are.
     {
-        for (float amount : { 0.0f, 1.0f })
+        for (float amount : { 0.0f })
         {
-            FieldSettings s; s.drift = amount; s.width = 0.0f; s.fluxDepth = 0.0f;
+            FieldSettings s; s.width = 0.0f; s.fluxAmount = amount;
             FluxField f; f.setSettings (s); f.prepare (sr);
             std::vector<float> buf (64, 0.0f);
             float lo = 1e9f, hi = 0.0f;
@@ -154,9 +154,8 @@ int main()
                 lo = std::min (lo, f.getCellFrequencyNow (5)); hi = std::max (hi, f.getCellFrequencyNow (5));
             }
             const float rangeOct = std::log2 (hi / lo);
-            std::printf ("drift %.0f: cell 5 moved over %.3f octaves in 4 s\n", amount, rangeOct);
-            if (amount == 0.0f) CHECK (rangeOct < 1e-4f, "cells move without drift (%.4f oct)", rangeOct);
-            else                CHECK (rangeOct > 0.05f && rangeOct < 1.0f, "drift range odd: %.3f oct", rangeOct);
+            std::printf ("static field: cell 5 moved over %.5f octaves in 4 s\n", rangeOct);
+            CHECK (rangeOct < 1e-4f, "cells move without modulation (%.4f oct)", rangeOct);
         }
     }
 
@@ -188,7 +187,7 @@ int main()
         constexpr int ticksPerSec = 48000 / FluxField::controlInterval;   // 1500
         struct Trace { std::vector<float> first, last, firstR; };
         auto record = [&] (FieldSettings s, float seconds) {
-            s.drift = 0.0f; s.fluxRateHz = 0.5f; s.fluxShape = LfoShape::Sine; s.density = 12;
+            s.fluxRateHz = 0.5f; s.fluxShape = LfoShape::Sine; s.density = 12;
             FluxField f; f.setSettings (s); f.prepare (sr);
             Trace t; std::vector<float> l (FluxField::controlInterval), r (FluxField::controlInterval);
             for (int k = 0; k < (int) (seconds * ticksPerSec); ++k)

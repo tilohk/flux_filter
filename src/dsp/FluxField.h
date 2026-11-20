@@ -19,7 +19,7 @@ enum class Character { Clean = 0, Warm, Broken };
 // Everything that shapes the field. Plain values, filled from the plugin parameters each block.
 struct FieldSettings
 {
-    int   density    = 12;      // number of active cells, 1..maxCells
+    int   density    = 8;       // number of active cells, 1..maxCells (the parameter goes up to 16)
     float centerHz   = 600.0f;  // Log: middle of the field. Other scales: lowest cell (root)
     float spread     = 4.0f;    // Log: span in octaves. Other scales: stretch, 4 = natural ratios
     CellScale scale  = CellScale::Log;
@@ -30,7 +30,6 @@ struct FieldSettings
     float width      = 0.5f;    // stereo: L/R cutoff offset + alternating pan (parallel)
 
     // Organic layer
-    float drift      = 0.15f;   // 0..1, slow independent wandering of every cell (up to ±1/4 octave)
     Character character = Character::Warm;
     float feedback   = 0.0f;    // 0..1, wet signal back into the field; near 1 it self-oscillates
     float damping    = 0.3f;    // 0..1, darkens the feedback path
@@ -40,8 +39,7 @@ struct FieldSettings
     // Flux: the built-in LFO and how its movement travels through the field
     float fluxRateHz = 0.3f;
     LfoShape fluxShape = LfoShape::Sine;
-    float fluxDepth  = 0.5f;    // cutoff movement, ± octaves
-    float fluxLevel  = 0.0f;    // 0..1, the wave also swells / ducks the cells' loudness
+    float fluxAmount = 0.25f;   // 0..1: how strongly the wave moves the field (cutoff ± up to 2 oct, plus level)
     PropagationSettings propagation;
 
     float driveDb    = 0.0f;    // input saturation
@@ -64,7 +62,7 @@ struct FastRandom
 
 // A field of resonant cells spread across the spectrum.
 // Coefficients are recomputed at control rate (every controlInterval samples) from smoothed
-// settings, drift and the flux wave (FluxPropagator), which moves each cell's cutoff and level.
+// settings and the flux wave (FluxPropagator), which moves each cell's cutoff and level.
 class FluxField
 {
 public:
@@ -72,6 +70,7 @@ public:
     static constexpr int maxChannels = 2;
     static constexpr int controlInterval = 32;
     static constexpr float wetCeiling = 4.0f, invWetCeiling = 1.0f / wetCeiling;
+    static constexpr float fluxMaxOctaves = 2.0f, fluxMaxLevel = 0.6f;
     using Matrix = ModMatrix<maxCells, maxChannels>;
 
     // What the UI shows: written by the audio thread every control tick, read by the UI at any time.
@@ -87,18 +86,14 @@ public:
         const float ticksPerSecond = sampleRate / (float) controlInterval;
         auto tickCoef = [ticksPerSecond] (float seconds) { return 1.0f - std::exp (-1.0f / (seconds * ticksPerSecond)); };
         smoothCoef   = tickCoef (0.025f);
-        driftSmooth  = tickCoef (0.12f);
         agSmooth     = tickCoef (0.25f);
         tickDt       = 1.0f / ticksPerSecond;
         envCoef      = 1.0f - std::exp (-1.0f / (0.3f * sampleRate));   // loudness detectors, per sample
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
-        rng.seed (0x1234567u);
         lfo.reset();
         propagator.prepare (ticksPerSecond);
         mod.prepare (sampleRate, ticksPerSecond);
-        for (auto& ch : driftWalk)   ch.fill (0.0f);
-        for (auto& ch : driftSmoothed) ch.fill (0.0f);
         agGain = 1.0f;
         for (auto& ch : levelMod) ch.fill (1.0f);
         reset();
@@ -119,7 +114,6 @@ public:
     // Modulation: settings per block (audio thread), transport per block, shapes from any thread.
     void setModSettings (const ModSettings& s) noexcept { mod.setSettings (s); }
     void setTransport (const Transport& t) noexcept { mod.setTransport (t); }
-    void setCustomShape (int lfoIndex, const CurveShape& shape) { mod.setCustomShape (lfoIndex, shape); }
 
     // In-place processing. right may be nullptr for mono.
     void process (float* left, float* right, int numSamples) noexcept
@@ -127,22 +121,20 @@ public:
         const int numCh = right != nullptr ? 2 : 1;
         stereo = numCh == 2;
         float* chans[2] = { left, right };
+        blockPeakPre.fill (0.0f);
+        blockPeakPost.fill (0.0f);
 
         for (int i = 0; i < numSamples; ++i)
         {
             if (samplesUntilTick <= 0)
             {
-                controlTick();
+                controlTick (i);
                 samplesUntilTick = controlInterval;
             }
             --samplesUntilTick;
 
             float inSq = 0.0f, wetSq = 0.0f;
             float wetCh[2] = { 0.0f, 0.0f };
-            float peak = 0.0f;
-            for (int ch = 0; ch < numCh; ++ch)
-                peak = std::max (peak, std::abs (chans[ch][i]));
-            mod.pushInput (peak);
 
             for (int ch = 0; ch < numCh; ++ch)
             {
@@ -164,6 +156,7 @@ public:
                 // Soft wet ceiling at +12 dBFS (transparent below ~0 dBFS), even with the limiter off.
                 const float wet = wetCeiling * softClip (wetCh[ch] * agGain * invWetCeiling);
                 float out = (dry + (wet - dry) * effMix) * outGain;
+                blockPeakPre[(size_t) ch] = std::max (blockPeakPre[(size_t) ch], std::abs (out));
                 if (cur.limiter)
                     out = safetyLimit (out);
 
@@ -173,18 +166,23 @@ public:
                     out = 0.0f;
                 }
                 chans[ch][i] = out;
+                blockPeakPost[(size_t) ch] = std::max (blockPeakPost[(size_t) ch], std::abs (out));
             }
         }
     }
 
     // For tests / future visualiser (audio thread only).
-    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before drift
+    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before modulation
     float getCellFrequencyNow (int i, int ch = 0) const noexcept { return cellFreqNow[(size_t) ch][(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
     float getAutoGain() const noexcept { return agGain; }
     float getFluxValue (int i, int ch = 0) const noexcept { return propagator.get (i, ch); }
     const Matrix& getMatrix() const noexcept { return mod; }
     const Snapshot& getSnapshot() const noexcept { return snapshot; }
+
+    // Peaks of the last process() call: before the safety limiter (clip detection) and at the output.
+    float getPeakBeforeLimiter (int ch) const noexcept { return blockPeakPre[(size_t) ch]; }
+    float getPeakOut (int ch) const noexcept { return blockPeakPost[(size_t) ch]; }
 
     // Below 0.8 linear; above, a smooth knee that never exceeds ±1.
     static float safetyLimit (float x) noexcept
@@ -293,11 +291,9 @@ private:
         glide (cur.morph, target.morph);
         glide (cur.combine, target.combine);
         glide (cur.width, target.width);
-        glide (cur.drift, target.drift);
         glide (cur.feedback, target.feedback);
         glide (cur.damping, target.damping);
-        glide (cur.fluxDepth, target.fluxDepth);
-        glide (cur.fluxLevel, target.fluxLevel);
+        glide (cur.fluxAmount, target.fluxAmount);
         glide (cur.propagation.travelSec, target.propagation.travelSec);
         glide (cur.propagation.viscosity, target.propagation.viscosity);
         glide (cur.propagation.wavelength, target.propagation.wavelength);
@@ -316,21 +312,6 @@ private:
         cur.limiter = target.limiter;
     }
 
-    // Ornstein-Uhlenbeck walk per cell and channel: wanders, but always drifts back home.
-    void updateDrift() noexcept
-    {
-        constexpr float theta = 2.0f * 3.14159265f * 0.25f;            // pull back, ~0.6 s
-        const float sigma = std::sqrt (2.0f * theta) * std::sqrt (tickDt); // stationary σ = 1
-        for (int ch = 0; ch < maxChannels; ++ch)
-            for (int c = 0; c < maxCells; ++c)
-            {
-                auto& w = driftWalk[(size_t) ch][(size_t) c];
-                w += -theta * w * tickDt + sigma * rng.nextGaussianish();
-                auto& s = driftSmoothed[(size_t) ch][(size_t) c];
-                s += (w - s) * driftSmooth;
-            }
-    }
-
     void updateAutoGain() noexcept
     {
         if (! cur.autoGain)
@@ -341,7 +322,9 @@ private:
         // Only adapt while there is real input; tails and feedback drones keep the last gain.
         if (inPow > 1.0e-7f)
         {
-            const float targetAg = std::clamp (std::sqrt (inPow / (wetPow + 1.0e-12f)), 0.125f, 8.0f); // ±18 dB
+            // Aim 3 dB under the input's loudness (resonant peaks are spikier than the input),
+            // boost at most +12 dB, cut at most -18 dB.
+            const float targetAg = std::clamp (std::sqrt (inPow / (wetPow + 1.0e-12f)) * 0.708f, 0.125f, 4.0f);
             agGain += (targetAg - agGain) * agSmooth;
         }
     }
@@ -367,14 +350,10 @@ private:
         auto m = [this] (FP p, float base, ModTarget t) { return Matrix::modulated (p, base, mod.global (t)); };
         FieldSettings e = cur;
         e.spread    = m (FP::Spread, cur.spread, ModTarget::Spread);
-        e.tiltDbOct = m (FP::Tilt, cur.tiltDbOct, ModTarget::Tilt);
-        e.combine   = m (FP::Combine, cur.combine, ModTarget::Combine);
         e.width     = m (FP::Width, cur.width, ModTarget::Width);
-        e.drift     = m (FP::Drift, cur.drift, ModTarget::Drift);
         e.feedback  = m (FP::Feedback, cur.feedback, ModTarget::Feedback);
         e.damping   = m (FP::Damping, cur.damping, ModTarget::Damping);
-        e.fluxDepth = m (FP::FluxDepth, cur.fluxDepth, ModTarget::FluxDepth);
-        e.fluxLevel = m (FP::FluxLevel, cur.fluxLevel, ModTarget::FluxLevel);
+        e.fluxAmount = m (FP::FluxAmount, cur.fluxAmount, ModTarget::FluxAmount);
         e.propagation.travelSec  = m (FP::Travel, cur.propagation.travelSec, ModTarget::Travel);
         e.propagation.viscosity  = m (FP::Viscosity, cur.propagation.viscosity, ModTarget::Viscosity);
         e.propagation.wavelength = m (FP::Wavelength, cur.propagation.wavelength, ModTarget::Wavelength);
@@ -388,16 +367,15 @@ private:
 
     static float qFromResonance (float r) noexcept { return 0.5f * std::exp2 (std::clamp (r, 0.0f, 1.0f) * 7.0f); }
 
-    void controlTick() noexcept
+    void controlTick (int sampleOffset) noexcept
     {
         smoothTowardsTarget();
-        updateDrift();
         updateAutoGain();
 
         // Modulation: the flux LFO (rate uses last tick's offsets), then every source and the matrix.
         const float fluxRate = Matrix::modulated (spec::FP::FluxRate, cur.fluxRateHz, mod.global (ModTarget::FluxRate));
         const float fluxLfoValue = lfo.advance (fluxRate, cur.fluxShape, tickDt);
-        mod.tickSources (tickDt, fluxLfoValue);
+        mod.tickSources (tickDt, sampleOffset);
         mod.computeSlots();
         const FieldSettings e = effectiveSettings();
         effMix = e.mix;
@@ -418,7 +396,7 @@ private:
         }
         activeCells = newCount;
 
-        // The waves: the flux LFO and every Flux-enabled matrix slot travel through the cells.
+        // The waves: the flux LFO and every connection from a Flux-enabled LFO travel through the cells.
         propagator.process (fluxLfoValue, e.propagation, activeCells);
         mod.propagate (e.propagation, activeCells);
 
@@ -427,8 +405,9 @@ private:
         const float maxHz = 0.45f * sampleRate;
         const float stretch = e.spread / 4.0f;
         const float serialBase = std::min (1.0f, 3.0f / (float) activeCells);
-        const float driftOct = 0.25f * e.drift;
         const float baseQ = qFromResonance (cur.resonance);   // static compensation; auto gain does the rest
+        const float fluxDepth = fluxMaxOctaves * e.fluxAmount;
+        const float fluxLevel = fluxMaxLevel * e.fluxAmount;
 
         float satLimit = 4.0f, satAsym = 0.0f;
         switch (cur.character)
@@ -459,7 +438,7 @@ private:
             const float tiltDb = std::clamp (e.tiltDbOct * octFromCenter, -24.0f, 24.0f);
             targetGain[(size_t) c] = audible * std::pow (10.0f, tiltDb / 20.0f);
 
-            // Width: alternate cells lean left/right, and L/R cutoffs drift apart slightly.
+            // Width: alternate cells lean left/right, and L/R cutoffs move apart slightly.
             const float side = (c % 2 == 0) ? 1.0f : -1.0f;
             const float detuneOct = 0.1f * e.width * side;
             const float p = e.width * side;                // -1..1, +1 = left
@@ -470,9 +449,7 @@ private:
             for (int ch = 0; ch < maxChannels; ++ch)
             {
                 const float v = std::clamp (propagator.get (c, ch), -1.0f, 1.0f);
-                const float swell = 1.0f + e.fluxLevel * (v - 1.0f) * 0.5f;
-                const float matrixLevel = std::clamp (1.0f + mod.cell (ModTarget::CellLevel, c, ch), 0.0f, 2.0f);
-                levelMod[(size_t) ch][(size_t) c] = swell * matrixLevel;
+                levelMod[(size_t) ch][(size_t) c] = 1.0f + fluxLevel * (v - 1.0f) * 0.5f;
             }
 
             if (! updateCoefficients)
@@ -480,17 +457,16 @@ private:
 
             for (int ch = 0; ch < maxChannels; ++ch)
             {
-                // Mono uses channel 0's drift and waves for both; stereo moves L and R independently.
-                const float d = driftSmoothed[(size_t) ch][(size_t) c] * driftOct;
-                const float wave = propagator.get (c, ch) * e.fluxDepth;
+                // Mono uses channel 0's waves for both; stereo moves L and R independently.
+                const float wave = propagator.get (c, ch) * fluxDepth;
 
-                // Matrix cutoff modulation lives in the Center knob's range: the same offset moves a
+                // Cutoff modulation lives in the Center knob's range: the same offset moves a
                 // cell as far as turning Center would.
                 const float cutOff = mod.cell (ModTarget::Cutoff, c, ch);
                 const float matrixOct = cutOff != 0.0f
                     ? std::log2 (centerSpec.from01 (centerNorm + cutOff) / cur.centerHz) : 0.0f;
 
-                float octs = std::log2 (f) + (ch == 0 ? detuneOct : -detuneOct) + d + wave + matrixOct;
+                float octs = std::log2 (f) + (ch == 0 ? detuneOct : -detuneOct) + wave + matrixOct;
                 if (broken)
                     octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
                 const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
@@ -549,7 +525,7 @@ private:
     }
 
     float sampleRate = 44100.0f;
-    float smoothCoef = 1.0f, driftSmooth = 1.0f, agSmooth = 1.0f, tickDt = 0.001f;
+    float smoothCoef = 1.0f, agSmooth = 1.0f, tickDt = 0.001f;
     float envCoef = 0.001f, dcCoef = 0.999f;
     bool  firstTick = true;
     bool  stereo = true;
@@ -558,16 +534,16 @@ private:
 
     FieldSettings target, cur;
     float logCenter = 0.0f;
-    FastRandom rng;
     FluxLfo lfo;
     FluxPropagator<maxCells, maxChannels> propagator;
     Matrix mod;
     float effMix = 1.0f;
+    std::array<float, maxChannels> blockPeakPre {}, blockPeakPost {};
 
     int activeCells = 0;
     std::array<std::array<FluxCell, maxCells>, maxChannels> parallelCells {}, serialCells {};
     std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {}, serialDepth {};
-    std::array<std::array<float, maxCells>, maxChannels> pan {}, driftWalk {}, driftSmoothed {}, cellFreqNow {};
+    std::array<std::array<float, maxCells>, maxChannels> pan {}, cellFreqNow {};
     std::array<std::array<float, maxCells>, maxChannels> levelMod {}, cellQ {};
     Snapshot snapshot;
 

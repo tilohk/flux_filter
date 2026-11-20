@@ -33,14 +33,14 @@ target_sources(FluxFilter PRIVATE
         src/dsp/FluxPropagator.h
         src/params/Parameters.h
         src/params/ParamSpec.h
-        src/mod/CurveShape.h
         src/mod/ModSources.h
         src/mod/ModMatrix.h
         src/ui/FluxLookAndFeel.h
         src/ui/ParamControl.h
         src/ui/FieldView.h
-        src/ui/ModWidgets.h
-        src/ui/MatrixView.h
+        src/ui/ModContext.h
+        src/ui/SourceModules.h
+        src/ui/Sections.h
 )
 
 target_include_directories(FluxFilter PRIVATE src)

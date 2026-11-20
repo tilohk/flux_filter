@@ -3,12 +3,15 @@
 #include "PluginProcessor.h"
 #include "ui/FieldView.h"
 #include "ui/FluxLookAndFeel.h"
-#include "ui/MatrixView.h"
-#include "ui/ModWidgets.h"
+#include "ui/ModContext.h"
 #include "ui/ParamControl.h"
+#include "ui/Sections.h"
+#include "ui/SourceModules.h"
 
-// Layout: header · live field display (always visible) · tabs for Field, Modulation and Matrix.
-class FluxFilterAudioProcessorEditor : public juce::AudioProcessorEditor
+// One panel: header · field display with output spectrum + Output · Cells | Flux | Character ·
+// LFO 1-3 (drag their move icons onto knobs) + the selected knob's modulation.
+// The panel is laid out at a fixed design size and scaled as a whole when the window is resized.
+class FluxFilterAudioProcessorEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer
 {
 public:
     explicit FluxFilterAudioProcessorEditor (FluxFilterAudioProcessor&);
@@ -17,52 +20,32 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    static constexpr int designWidth = 1140, designHeight = 794;
+
 private:
    #if JUCE_DEBUG
-    void writeSnapshots (const juce::File& dir);
+    void writeSnapshot (const juce::File& dir);
    #endif
 
-    // Lays out sections in columns; each column stacks its sections top to bottom.
-    class SectionPage : public juce::Component
+    class Panel : public juce::Component
     {
     public:
-        flux::ui::ParamSection& addSection (const juce::String& title, int column, float widthWeight = 1.0f);
+        explicit Panel (FluxFilterAudioProcessor&);
+        void paint (juce::Graphics&) override;
         void resized() override;
+        flux::ui::ModContext ctx;
     private:
-        struct Entry { std::unique_ptr<flux::ui::ParamSection> section; int column; float weight; };
-        std::vector<Entry> entries;
-    };
-
-    class ModPage : public juce::Component
-    {
-    public:
-        explicit ModPage (FluxFilterAudioProcessor&);
-        void resized() override;
-    private:
-        struct Stack : juce::Component   // vertical stack of extra widgets below a section's controls
-        {
-            std::vector<std::unique_ptr<juce::Component>> items;
-            std::vector<int> heights;
-            void add (std::unique_ptr<juce::Component> c, int h) { addAndMakeVisible (*c); items.push_back (std::move (c)); heights.push_back (h); }
-            int total() const { int t = 0; for (int h : heights) t += h + 4; return t; }
-            void resized() override
-            {
-                auto r = getLocalBounds();
-                for (size_t i = 0; i < items.size(); ++i) { items[i]->setBounds (r.removeFromTop (heights[i])); r.removeFromTop (4); }
-            }
-        };
-        std::vector<std::unique_ptr<flux::ui::ParamSection>> lfoSections, lowerSections;
-        std::vector<std::unique_ptr<Stack>> stacks;
+        flux::ui::FieldView fieldView;
+        flux::ui::ParamSection cells { "Cells", 3 }, character { "Character", 2 };
+        flux::ui::FluxSection flux;
+        flux::ui::OutputSection output;
+        std::vector<std::unique_ptr<flux::ui::LfoModule>> lfos;
+        flux::ui::ModPanel modPanel;
     };
 
     flux::ui::FluxLookAndFeel lookAndFeel;
     juce::TooltipWindow tooltips { this };
-
-    flux::ui::FieldView fieldView;
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    SectionPage fieldPage;
-    ModPage modPage;
-    flux::ui::MatrixView matrixView;
+    Panel panel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FluxFilterAudioProcessorEditor)
 };

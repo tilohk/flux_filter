@@ -2,20 +2,48 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "mod/ModMatrix.h"
+
 namespace flux::ui
 {
 
 namespace colours
 {
-    inline const juce::Colour background { 0xff111316 };
-    inline const juce::Colour panel      { 0xff1a1d22 };
-    inline const juce::Colour panelEdge  { 0xff272b32 };
-    inline const juce::Colour text       { 0xffd8dde3 };
-    inline const juce::Colour dim        { 0xff7d8590 };
+    inline const juce::Colour background { 0xff131110 };   // plugin background: warm near-black
+    inline const juce::Colour panel      { 0xff2b2724 };   // "warm charcoal": every section except the field display
+    inline const juce::Colour panelEdge  { 0xff3b3531 };
+    inline const juce::Colour viewport   { 0xff1b1816 };   // field display background (deep warm brown-black)
+    inline const juce::Colour viewportGrid { 0xff2e2925 };
+    inline const juce::Colour channelL   { 0xff8fc9a9 };   // field display: left cells (sage)
+    inline const juce::Colour channelR   { 0xffe08a78 };   // right cells (clay rose)
+    inline const juce::Colour spectrum   { 0xffd8cec2 };
+    inline const juce::Colour knobTop    { 0xff4a423c };   // knob body gradient
+    inline const juce::Colour knobBottom { 0xff1f1b18 };
+    inline const juce::Colour text       { 0xffeee8e2 };
+    inline const juce::Colour dim        { 0xffb0a79f };
     inline const juce::Colour accent     { 0xff3ad6c4 };   // left channel / main accent
     inline const juce::Colour accent2    { 0xffd65aa8 };   // right channel
-    inline const juce::Colour track      { 0xff2c3138 };
+    inline const juce::Colour track      { 0xff1a1d22 };   // the old dark panel colour: knob tracks and buttons look recessed
+    inline const juce::Colour flux       { 0xffffa23a };   // the flux highlight: hero knob, LFO flux switches
+    inline const juce::Colour clip       { 0xffff4b4b };
+
+    inline juce::Colour source (ModSource s)
+    {
+        switch (s)
+        {
+            case ModSource::Lfo1:  return juce::Colour (0xff4d8dff);   // blue
+            case ModSource::Lfo2:  return juce::Colour (0xffff4f6e);   // red
+            case ModSource::Lfo3:  return juce::Colour (0xff8ae65a);   // green
+            case ModSource::None:
+            case ModSource::Count: break;
+        }
+        return dim;
+    }
 }
+
+// Slider properties understood by the look and feel.
+inline const juce::Identifier heroKnobProperty ("fluxHero");
+inline const juce::Identifier stepsProperty ("steps");   // number of positions: draws a marker per step
 
 class FluxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -45,41 +73,110 @@ public:
         setColour (juce::TabbedButtonBar::frontTextColourId, text);
         setColour (juce::TabbedComponent::backgroundColourId, background);
         setColour (juce::TabbedComponent::outlineColourId, juce::Colours::transparentBlack);
+        setColour (juce::TextButton::buttonColourId, track);
+        setColour (juce::TextButton::buttonOnColourId, accent);
+        setColour (juce::TextButton::textColourOffId, dim);
+        setColour (juce::TextButton::textColourOnId, background);
+        setColour (juce::TooltipWindow::backgroundColourId, panel);
+        setColour (juce::TooltipWindow::textColourId, text);
+        setColour (juce::TooltipWindow::outlineColourId, panelEdge);
     }
 
+    void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour& background,
+                               bool highlighted, bool down) override
+    {
+        auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+        auto c = background;
+        if (! b.isEnabled()) c = c.withMultipliedAlpha (0.4f);
+        else if (down)       c = c.brighter (0.15f);
+        else if (highlighted) c = c.brighter (0.08f);
+        const float corner = juce::jmin (r.getHeight() * 0.5f, 6.0f);
+        if (b.getToggleState() && b.isEnabled())   // soft glow around switched-on pills
+        {
+            g.setColour (c.withAlpha (0.25f));
+            g.fillRoundedRectangle (r.expanded (1.5f), corner + 1.5f);
+        }
+        g.setColour (c);
+        g.fillRoundedRectangle (r, corner);
+    }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return juce::FontOptions (12.0f, juce::Font::bold); }
+
+    // Every knob is a round body with a pointer, inside a value arc. The flux knobs (hero) add an
+    // orange glow that grows with the amount.
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float pos,
                            float startAngle, float endAngle, juce::Slider& slider) override
     {
-        const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (4.0f);
+        const bool hero = slider.getProperties()[heroKnobProperty];
+        const auto bounds = knobBounds (juce::Rectangle<int> (x, y, width, height));
         const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
         const auto centre = bounds.getCentre();
-        const float lineW = juce::jmax (2.5f, radius * 0.14f);
-        const float arcR = radius - lineW * 0.5f;
+        const float lineW = hero ? juce::jmax (2.5f, radius * 0.1f) : juce::jmax (3.0f, radius * 0.15f);
+        const auto valueColour = hero ? colours::flux
+                               : slider.isColourSpecified (juce::Slider::rotarySliderFillColourId)
+                                     ? slider.findColour (juce::Slider::rotarySliderFillColourId) : colours::accent;
 
+        if (hero)
+        {
+            const float glow = 0.08f + 0.3f * pos;
+            g.setGradientFill (juce::ColourGradient (colours::flux.withAlpha (glow), centre.x, centre.y,
+                                                     colours::flux.withAlpha (0.0f), centre.x + radius * 1.15f, centre.y, true));
+            g.fillEllipse (bounds.expanded (radius * 0.15f));
+        }
+
+        // Value arc on a recessed track.
+        const float arcR = radius - lineW * 0.5f;
         juce::Path track;
         track.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
         g.setColour (colours::track);
         g.strokePath (track, { lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
 
-        // Bipolar parameters fill from the middle.
-        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
+        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;   // fills from the middle
         const float fromPos = bipolar ? (float) slider.valueToProportionOfLength (0.0) : 0.0f;
         const float a0 = startAngle + fromPos * (endAngle - startAngle);
         const float a1 = startAngle + pos * (endAngle - startAngle);
-
         if (std::abs (a1 - a0) > 0.001f)
         {
             juce::Path value;
             value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, juce::jmin (a0, a1), juce::jmax (a0, a1), true);
-            g.setColour (slider.isEnabled() ? colours::accent : colours::dim);
+            g.setColour (slider.isEnabled() ? valueColour : colours::dim);
             g.strokePath (value, { lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
         }
 
-        const float dotR = lineW * 0.55f;
-        const juce::Point<float> tip (centre.x + (arcR - lineW * 1.6f) * std::sin (a1),
-                                      centre.y - (arcR - lineW * 1.6f) * std::cos (a1));
-        g.setColour (colours::text);
-        g.fillEllipse (juce::Rectangle<float> (dotR * 2.0f, dotR * 2.0f).withCentre (tip));
+        // Knob body: soft drop shadow, top-lit gradient, thin rim highlight.
+        const float bodyR = arcR - lineW * 0.5f - lineW * (hero ? 1.4f : 0.9f);
+        const auto body = juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (centre);
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillEllipse (body.translated (0.0f, bodyR * 0.08f + 1.0f).expanded (1.0f));
+        g.setGradientFill (juce::ColourGradient (colours::knobTop, centre.x, body.getY(),
+                                                 colours::knobBottom, centre.x, body.getBottom(), false));
+        g.fillEllipse (body);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.14f), centre.x, body.getY(),
+                                                 juce::Colours::white.withAlpha (0.0f), centre.x, body.getCentreY(), false));
+        g.drawEllipse (body.reduced (0.5f), 1.0f);
+        if (hero)
+        {
+            g.setColour (colours::flux.withAlpha (0.35f));
+            g.drawEllipse (body, 1.0f);
+        }
+
+        juce::Path pointer;
+        pointer.startNewSubPath (centre.x + bodyR * 0.3f * std::sin (a1), centre.y - bodyR * 0.3f * std::cos (a1));
+        pointer.lineTo (centre.x + bodyR * 0.82f * std::sin (a1), centre.y - bodyR * 0.82f * std::cos (a1));
+        g.setColour (slider.isEnabled() ? colours::text : colours::dim);
+        g.strokePath (pointer, { hero ? juce::jmax (2.0f, bodyR * 0.05f) : 2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
+
+        if (const int steps = slider.getProperties()[stepsProperty]; steps > 1)
+        {
+            const int current = juce::roundToInt (pos * (float) (steps - 1));
+            for (int i = 0; i < steps; ++i)
+            {
+                const float a = startAngle + (float) i / (float) (steps - 1) * (endAngle - startAngle);
+                const float rr = arcR + lineW * 0.5f + 3.0f;
+                g.setColour (i == current ? colours::text : colours::dim);
+                g.fillEllipse (juce::Rectangle<float> (3.0f, 3.0f).withCentre ({ centre.x + rr * std::sin (a), centre.y - rr * std::cos (a) }));
+            }
+        }
     }
 
     void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
@@ -110,6 +207,14 @@ public:
         }
         g.setColour (colours::text);
         g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ sliderPos, r.getCentreY() }));
+    }
+
+    // Where the knob is drawn inside a rotary slider's area (leaves room for modulation rings).
+    static juce::Rectangle<float> knobBounds (juce::Rectangle<int> sliderArea)
+    {
+        auto r = sliderArea.toFloat().reduced (7.0f);
+        const float size = juce::jmin (r.getWidth(), r.getHeight());
+        return r.withSizeKeepingCentre (size, size);
     }
 
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::FontOptions (13.0f); }

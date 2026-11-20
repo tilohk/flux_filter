@@ -37,13 +37,27 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Drawable LFO shapes (used when an LFO's shape is "Custom"). Any non-audio thread.
-    flux::CurveShape getCustomShape (int lfoIndex) const;
-    void setCustomShape (int lfoIndex, const flux::CurveShape& shape);
-
     // Live data for the UI (lock-free, any thread).
     const flux::FluxField::Snapshot& getFieldSnapshot() const noexcept { return field.getSnapshot(); }
     float getModSourceValue (flux::ModSource s) const noexcept { return field.getMatrix().publishedSource (s); }
+    float getSampleRateForUi() const noexcept { return uiSampleRate.load (std::memory_order_relaxed); }
+
+    // Output meters: highest peak since the last call (resets it). clip = went over 0 dBFS before the limiter.
+    float takeOutputPeak (int ch) noexcept { return outPeak[(size_t) ch].exchange (0.0f, std::memory_order_relaxed); }
+    bool takeClip (int ch) noexcept { return clipped[(size_t) ch].exchange (false, std::memory_order_relaxed); }
+
+    // Output spectrum: mono output samples for the UI's analyser (single reader). Returns how many were copied.
+    int pullAnalyserSamples (float* dest, int maxSamples) noexcept;
+
+   #if JUCE_DEBUG
+    // Dev aid for UI snapshots: feed the analyser without audio running (message thread only).
+    void debugPushAnalyserSamples (const float* src, int n) noexcept
+    {
+        const auto scope = spectrumFifo.write (n);
+        std::copy_n (src, scope.blockSize1, spectrumBuffer.data() + scope.startIndex1);
+        std::copy_n (src + scope.blockSize1, scope.blockSize2, spectrumBuffer.data() + scope.startIndex2);
+    }
+   #endif
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -57,22 +71,25 @@ private:
     // Cached raw parameter pointers (read on the audio thread without lookups).
     std::array<std::atomic<float>*, (size_t) flux::spec::FP::Count> floatParams {};
     std::atomic<float>* pDensity = nullptr;
-    std::atomic<float>* pScale = nullptr;
     std::atomic<float>* pCharacter = nullptr;
     std::atomic<float>* pAutoGain = nullptr;
     std::atomic<float>* pLimiter = nullptr;
     std::atomic<float>* pFluxShape = nullptr;
     std::atomic<float>* pDirection = nullptr;
-    std::atomic<float>* pDriftMode = nullptr;
 
-    struct LfoParams { std::atomic<float>* sync; std::atomic<float>* division; std::atomic<float>* shape; std::atomic<float>* polarity; };
-    struct SlotParams { std::atomic<float>* source; std::atomic<float>* target; std::atomic<float>* depth;
-                        std::atomic<float>* curve; std::atomic<float>* flux; std::atomic<float>* via; };
+    struct LfoParams { std::atomic<float>* sync; std::atomic<float>* division; std::atomic<float>* shape;
+                       std::atomic<float>* unipolar; std::atomic<float>* flux; };
+    struct SlotParams { std::atomic<float>* source; std::atomic<float>* target; std::atomic<float>* depth; };
     std::array<LfoParams, flux::ModSettings::numLfos> lfoParams {};
     std::array<SlotParams, flux::ModSettings::numSlots> slotParams {};
 
-    mutable juce::CriticalSection shapeLock;
-    std::array<flux::CurveShape, flux::ModSettings::numLfos> customShapes;
+    // UI feeds
+    static constexpr int spectrumFifoSize = 8192;
+    juce::AbstractFifo spectrumFifo { spectrumFifoSize };
+    std::array<float, spectrumFifoSize> spectrumBuffer {};
+    std::array<std::atomic<float>, 2> outPeak {};
+    std::array<std::atomic<bool>, 2> clipped {};
+    std::atomic<float> uiSampleRate { 48000.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FluxFilterAudioProcessor)
 };
