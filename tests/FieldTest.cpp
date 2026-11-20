@@ -54,12 +54,17 @@ int main()
     // 1. Stress: extreme settings, loud noise, settings jumping every block.
     {
         std::mt19937 rng (7); std::uniform_real_distribution<float> u (0.0f, 1.0f);
+        float worstUnlimited = 0.0f;
         for (int scale = 0; scale < 4; ++scale)
             for (float combine : { 0.0f, 0.5f, 1.0f })
+            for (int character = 0; character < 3; ++character)
+            for (bool limiter : { true, false })
             {
                 FluxField f; FieldSettings s;
                 s.density = 24; s.resonance = 1.0f; s.driveDb = 24.0f; s.combine = combine;
                 s.scale = (CellScale) scale; s.tiltDbOct = 12.0f;
+                s.character = (Character) character; s.limiter = limiter;
+                s.feedback = 1.0f; s.drift = 1.0f; s.damping = 0.0f;
                 f.setSettings (s); f.prepare (sr);
 
                 auto l = noise ((size_t) sr * 2, 1.0f, 1), r = noise ((size_t) sr * 2, 1.0f, 2);
@@ -75,16 +80,21 @@ int main()
                 for (float v : l) { a.finite &= std::isfinite (v); a.peak = std::max (a.peak, std::abs (v)); }
                 for (float v : r) { b.finite &= std::isfinite (v); b.peak = std::max (b.peak, std::abs (v)); }
                 (void) dummy;
-                std::printf ("stress scale=%d combine=%.1f  peakL=%.2f peakR=%.2f\n", scale, combine, a.peak, b.peak);
-                CHECK (a.finite && b.finite, "non-finite output (scale %d, combine %.1f)", scale, combine);
-                CHECK (a.peak < 16.0f && b.peak < 16.0f, "runaway level %.2f/%.2f (scale %d, combine %.1f)", a.peak, b.peak, scale, combine);
+                const float peak = std::max (a.peak, b.peak);
+                worstUnlimited = limiter ? worstUnlimited : std::max (worstUnlimited, peak);
+                CHECK (a.finite && b.finite, "non-finite output (scale %d, combine %.1f, char %d)", scale, combine, character);
+                if (limiter)
+                    CHECK (peak <= 1.0f, "limiter let %.3f through (scale %d, combine %.1f, char %d)", peak, scale, combine, character);
+                else
+                    CHECK (peak <= 4.001f, "wet ceiling broken, level %.2f (scale %d, combine %.1f, char %d)", peak, scale, combine, character);
             }
+        std::printf ("stress: 72 extreme combinations finite, limiter holds; worst peak without limiter %.2f\n", worstUnlimited);
     }
 
     // 2. Resonant peaks sit on the cells: a sine on a cell passes louder than one between cells.
     {
         FieldSettings s; s.density = 8; s.centerHz = 1000.0f; s.spread = 4.0f; s.resonance = 0.85f;
-        s.morph = 1.0f; s.width = 0.0f;
+        s.morph = 1.0f; s.width = 0.0f; s.drift = 0.0f; s.autoGain = false;
         FluxField probe; probe.setSettings (s); probe.prepare (sr);
         std::vector<float> tmp (64, 0.0f); probe.process (tmp.data(), nullptr, 64);
         const float onCell = probe.getCellFrequency (3);
@@ -116,11 +126,59 @@ int main()
         float maxDiff = 0.0f; for (size_t i = 0; i < v.size(); ++i) maxDiff = std::max (maxDiff, std::abs (v[i] - in[i]));
         CHECK (maxDiff < 1e-6f, "mix=0 not transparent (diff %g)", maxDiff);
 
-        FluxField g; g.setSettings (FieldSettings {}); g.prepare (sr);
-        auto w = noise (48000 * 2, 0.5f); const double inRms = rmsTail (w); run (g, w, nullptr);
-        const double ratioDb = 20.0 * std::log10 (rmsTail (w) / inRms);
-        std::printf ("default settings on noise: %.1f dB vs input\n", ratioDb);
-        CHECK (ratioDb > -24.0 && ratioDb < 12.0, "default level off: %.1f dB", ratioDb);
+        for (bool ag : { false, true })
+        {
+            FieldSettings d; d.autoGain = ag;
+            FluxField g; g.setSettings (d); g.prepare (sr);
+            auto w = noise (48000 * 3, 0.3f); const double inRms = rmsTail (w); run (g, w, nullptr);
+            const double ratioDb = 20.0 * std::log10 (rmsTail (w) / inRms);
+            std::printf ("default settings on noise, auto gain %s: %.1f dB vs input\n", ag ? "on " : "off", ratioDb);
+            if (ag) CHECK (std::abs (ratioDb) < 3.0, "auto gain misses input level: %.1f dB", ratioDb);
+            else    CHECK (ratioDb > -24.0 && ratioDb < 12.0, "default level off: %.1f dB", ratioDb);
+        }
+    }
+
+    // 5. Drift: cells wander when on, stay put when off.
+    {
+        for (float amount : { 0.0f, 1.0f })
+        {
+            FieldSettings s; s.drift = amount; s.width = 0.0f;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            std::vector<float> buf (64, 0.0f);
+            float lo = 1e9f, hi = 0.0f;
+            for (int b = 0; b < 48000 * 4 / 64; ++b)
+            {
+                std::fill (buf.begin(), buf.end(), 0.0f); f.process (buf.data(), nullptr, 64);
+                lo = std::min (lo, f.getCellFrequencyNow (5)); hi = std::max (hi, f.getCellFrequencyNow (5));
+            }
+            const float rangeOct = std::log2 (hi / lo);
+            std::printf ("drift %.0f: cell 5 moved over %.3f octaves in 4 s\n", amount, rangeOct);
+            if (amount == 0.0f) CHECK (rangeOct < 1e-4f, "cells move without drift (%.4f oct)", rangeOct);
+            else                CHECK (rangeOct > 0.05f && rangeOct < 1.0f, "drift range odd: %.3f oct", rangeOct);
+        }
+    }
+
+    // 6. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,
+    //    and auto gain does not pump the tail up.
+    {
+        FieldSettings s; s.feedback = 1.0f; s.damping = 0.0f; s.resonance = 0.9f; s.scale = CellScale::Harmonic;
+        s.centerHz = 110.0f;
+        FluxField f; f.setSettings (s); f.prepare (sr);
+        auto v = noise (48000, 0.3f);                      // 1 s of input...
+        v.resize (48000 * 4, 0.0f);                        // ...then 3 s of silence
+        run (f, v, nullptr);
+        double tail = 0.0; for (size_t i = 48000 * 3; i < v.size(); ++i) tail += (double) v[i] * v[i];
+        tail = std::sqrt (tail / 48000.0);
+        float peak = 0.0f; for (float x : v) peak = std::max (peak, std::abs (x));
+        std::printf ("feedback 1.0: tail rms %.4f after 2 s of silence, peak %.3f, auto gain %.2f\n", tail, peak, f.getAutoGain());
+        CHECK (tail > 1e-3, "no self-oscillation at feedback 1.0 (tail %.6f)", tail);
+        CHECK (peak <= 1.0f, "feedback peak %.3f", peak);
+
+        FieldSettings q = s; q.feedback = 0.0f;
+        FluxField g; g.setSettings (q); g.prepare (sr);
+        auto w = noise (48000, 0.3f); w.resize (48000 * 4, 0.0f); run (g, w, nullptr);
+        double tail0 = 0.0; for (size_t i = 48000 * 3; i < w.size(); ++i) tail0 += (double) w[i] * w[i];
+        CHECK (tail0 < 1e-6, "tail without feedback should die out (%.8f)", tail0);
     }
 
     std::printf (failures == 0 ? "ALL PASSED\n" : "%d FAILURE(S)\n", failures);

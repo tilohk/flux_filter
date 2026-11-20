@@ -44,6 +44,16 @@ public:
         else                    { wNotch = morph - 2.0f;  wHp = 1.0f - wNotch; }
     }
 
+    // limit: how far the band state can swing before it saturates (high = cleaner).
+    // asymmetry: the negative half saturates earlier, which adds even harmonics (0 = symmetric).
+    void setSaturation (float limit, float asymmetry) noexcept
+    {
+        stateLimit = limit;
+        invStateLimit = 1.0f / limit;
+        negDrive = 1.0f + asymmetry;
+        invNegDrive = 1.0f / negDrive;
+    }
+
     float process (float v0) noexcept
     {
         const float v3 = v0 - ic2;
@@ -52,7 +62,7 @@ public:
 
         // Saturate the band state: this is what gives the "growl" at high resonance
         // and keeps self-oscillation bounded.
-        ic1 = stateLimit * softClip ((2.0f * v1 - ic1) * invStateLimit);
+        ic1 = stateLimit * saturate ((2.0f * v1 - ic1) * invStateLimit);
         ic2 = 2.0f * v2 - ic2;
 
         const float lp = v2;
@@ -68,8 +78,15 @@ private:
     float k = 1.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
     float wLp = 0.0f, wBp = 1.0f, wHp = 0.0f, wNotch = 0.0f;
 
-    static constexpr float stateLimit = 4.0f;
-    static constexpr float invStateLimit = 1.0f / stateLimit;
+    // Slope is exactly 1 at zero and never above 1 anywhere: a slope < 1 near zero would add
+    // damping, a slope > 1 would inject energy (a quiet endless limit cycle).
+    float saturate (float x) const noexcept
+    {
+        return x >= 0.0f ? softClip (x) : softClip (x * negDrive) * invNegDrive;
+    }
+
+    float stateLimit = 4.0f, invStateLimit = 0.25f;
+    float negDrive = 1.0f, invNegDrive = 1.0f;
 };
 
 } // namespace flux

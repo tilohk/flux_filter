@@ -24,12 +24,15 @@ Each modulation value is applied to the field as a function of **cell position**
 - **Wavelength:** how many "peaks" across the field at once (sine-shaped spatial distribution vs uniform).
 - **Turbulence:** small per-cell random offsets (seeded, smooth) so cells never move in perfect lockstep → organic.
 
-## 3. Organic / deep character (the secret sauce)
-- **Analog drift:** each cell has a slow brownian cutoff wobble (subtle, on by default, amount knob).
-- **Nonlinear resonance:** tanh/asymmetric soft clip inside each SVF integrator loop → resonance thickens and "growls" when driven, never harsh.
-- **Global feedback** around the whole field with a damping lowpass → can self-oscillate into tuned drones/bodies.
-- **Energy compensation:** auto-gain by density & resonance so it stays usable while experimenting.
-- **Character switch:** Clean / Warm / Broken (adds bit-crush-ish quantization of cell cutoffs for experimental grit).
+## 3. Organic / deep character (built in phase 2)
+- **Drift:** every cell (and L/R separately) wanders on its own slow random walk that always returns home, up to ±1/4 octave.
+- **Character:** saturation inside each cell's resonance, set in output units so it behaves the same at any Q.
+  - *Clean*: bends only at very high levels.
+  - *Warm*: bends around 0 dBFS, the negative half earlier → even harmonics.
+  - *Broken*: bends early and hard, cutoffs snap to a quarter-octave grid and update in steps (every 256 samples).
+- **Feedback + Damping:** the wet signal goes back into the field through a lowpass and a soft clipper. Above ~0.9 the field self-oscillates into tuned drones.
+- **Auto Gain:** matches the wet loudness to the dry input (±18 dB, ~300 ms). It holds its value while the input is silent, so tails and drones are not pumped up.
+- **Safety:** DC blocker on the wet path, a soft +12 dBFS wet ceiling that is always on, and a switchable soft limiter at 0 dBFS (on by default).
 
 ## 4. Modulation system (full matrix)
 **Sources (v1):**
@@ -48,7 +51,7 @@ Each modulation value is applied to the field as a function of **cell position**
 ## 5. Parameters (v1 list)
 Field: Density, Center, Spread, Scale, Tilt, Resonance, Cell Morph, Combine Mode, Width
 Flux: Wave Speed, Direction, Viscosity, Wavelength, Turbulence
-Character: Drive, Feedback, Damping, Drift Amount, Character mode
+Character: Drive, Feedback, Damping, Drift, Character mode, Auto Gain, Limiter
 Output: Mix, Output Gain
 Mod: LFO1–3 (rate, sync, shape, phase), Env (atk, rel, sens), Chaos (speed), Drift (rate, slew), Macros 1–4, 16 matrix slots
 

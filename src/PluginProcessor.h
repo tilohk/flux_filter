@@ -53,6 +53,12 @@ private:
     std::atomic<float>* pMorph = nullptr;
     std::atomic<float>* pCombine = nullptr;
     std::atomic<float>* pWidth = nullptr;
+    std::atomic<float>* pDrift = nullptr;
+    std::atomic<float>* pCharacter = nullptr;
+    std::atomic<float>* pFeedback = nullptr;
+    std::atomic<float>* pDamping = nullptr;
+    std::atomic<float>* pAutoGain = nullptr;
+    std::atomic<float>* pLimiter = nullptr;
     std::atomic<float>* pDrive = nullptr;
     std::atomic<float>* pMix = nullptr;
     std::atomic<float>* pOutput = nullptr;

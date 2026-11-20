@@ -16,6 +16,12 @@ namespace flux::params
         inline constexpr auto morph     = "morph";
         inline constexpr auto combine   = "combine";
         inline constexpr auto width     = "width";
+        inline constexpr auto drift     = "drift";
+        inline constexpr auto character = "character";
+        inline constexpr auto feedback  = "feedback";
+        inline constexpr auto damping   = "damping";
+        inline constexpr auto autoGain  = "autoGain";
+        inline constexpr auto limiter   = "limiter";
         inline constexpr auto drive     = "drive";
         inline constexpr auto mix       = "mix";
         inline constexpr auto output    = "output";
@@ -27,6 +33,7 @@ namespace flux::params
         using Float  = AudioParameterFloat;
         using Int    = AudioParameterInt;
         using Choice = AudioParameterChoice;
+        using Bool   = AudioParameterBool;
         constexpr int v = 1; // parameter version hint for AU/VST3
 
         auto hz = AudioParameterFloatAttributes().withLabel ("Hz");
@@ -57,6 +64,13 @@ namespace flux::params
             std::make_unique<Float>  (ParameterID { id::morph, v }, "Morph", NormalisableRange<float> (0.0f, 3.0f), 1.0f, morphText),
             std::make_unique<Float>  (ParameterID { id::combine, v }, "Parallel/Serial", NormalisableRange<float> (0.0f, 1.0f), 0.0f),
             std::make_unique<Float>  (ParameterID { id::width, v }, "Width", NormalisableRange<float> (0.0f, 1.0f), 0.5f),
+            std::make_unique<Float>  (ParameterID { id::drift, v }, "Drift", NormalisableRange<float> (0.0f, 1.0f), 0.15f),
+            std::make_unique<Choice> (ParameterID { id::character, v }, "Character",
+                                      StringArray { "Clean", "Warm", "Broken" }, 1),
+            std::make_unique<Float>  (ParameterID { id::feedback, v }, "Feedback", NormalisableRange<float> (0.0f, 1.0f), 0.0f),
+            std::make_unique<Float>  (ParameterID { id::damping, v }, "Damping", NormalisableRange<float> (0.0f, 1.0f), 0.3f),
+            std::make_unique<Bool>   (ParameterID { id::autoGain, v }, "Auto Gain", true),
+            std::make_unique<Bool>   (ParameterID { id::limiter, v }, "Limiter", true),
             std::make_unique<Float>  (ParameterID { id::drive, v }, "Drive", NormalisableRange<float> (0.0f, 24.0f, 0.01f), 0.0f, db),
             std::make_unique<Float>  (ParameterID { id::mix, v }, "Mix", NormalisableRange<float> (0.0f, 1.0f), 1.0f),
             std::make_unique<Float>  (ParameterID { id::output, v }, "Output", NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, db));

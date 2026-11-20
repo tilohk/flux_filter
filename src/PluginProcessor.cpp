@@ -20,6 +20,12 @@ FluxFilterAudioProcessor::FluxFilterAudioProcessor()
     pMorph     = get (params::id::morph);
     pCombine   = get (params::id::combine);
     pWidth     = get (params::id::width);
+    pDrift     = get (params::id::drift);
+    pCharacter = get (params::id::character);
+    pFeedback  = get (params::id::feedback);
+    pDamping   = get (params::id::damping);
+    pAutoGain  = get (params::id::autoGain);
+    pLimiter   = get (params::id::limiter);
     pDrive     = get (params::id::drive);
     pMix       = get (params::id::mix);
     pOutput    = get (params::id::output);
@@ -55,6 +61,12 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     s.morph     = pMorph->load();
     s.combine   = pCombine->load();
     s.width     = pWidth->load();
+    s.drift     = pDrift->load();
+    s.character = (Character) (int) pCharacter->load();
+    s.feedback  = pFeedback->load();
+    s.damping   = pDamping->load();
+    s.autoGain  = pAutoGain->load() > 0.5f;
+    s.limiter   = pLimiter->load() > 0.5f;
     s.driveDb   = pDrive->load();
     s.mix       = pMix->load();
     s.outputDb  = pOutput->load();
