@@ -32,6 +32,10 @@ target_sources(FluxFilter PRIVATE
         src/dsp/FluxLfo.h
         src/dsp/FluxPropagator.h
         src/params/Parameters.h
+        src/params/ParamSpec.h
+        src/mod/CurveShape.h
+        src/mod/ModSources.h
+        src/mod/ModMatrix.h
 )
 
 target_include_directories(FluxFilter PRIVATE src)
@@ -57,3 +61,7 @@ target_link_libraries(FluxFilter
 add_executable(FluxFieldTest tests/FieldTest.cpp)
 target_include_directories(FluxFieldTest PRIVATE src)
 target_compile_features(FluxFieldTest PRIVATE cxx_std_20)
+
+add_executable(FluxModTest tests/ModTest.cpp)
+target_include_directories(FluxModTest PRIVATE src)
+target_compile_features(FluxModTest PRIVATE cxx_std_20)

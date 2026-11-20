@@ -37,26 +37,30 @@ A source signal (for now the built-in **Flux LFO**: Rate, Shape Sine/Triangle/Ra
 - **Auto Gain:** matches the wet loudness to the dry input (±18 dB, ~300 ms). It holds its value while the input is silent, so tails and drones are not pumped up.
 - **Safety:** DC blocker on the wet path, a soft +12 dBFS wet ceiling that is always on, and a switchable soft limiter at 0 dBFS (on by default).
 
-## 4. Modulation system (full matrix)
-**Sources (v1):**
+## 4. Modulation system (built in phase 4)
+**Sources:**
 | Source | Details |
 |---|---|
-| LFO 1–3 | Tempo-sync or Hz, drawable curve (points + curvature, like Vital), phase, retrigger, unipolar/bipolar |
-| Envelope Follower | Attack/release, sensitivity, plus split into **Transient** and **Body** outputs (two sources) |
-| Chaos | Lorenz attractor (X/Y as two sources), speed, character |
-| Drift | Smooth brownian / sample&hold with slew |
-| Macros 1–4 | Knobs the user maps to many targets |
+| Flux LFO | The phase 3 wave LFO, also usable in the matrix |
+| LFO 1–3 | Hz or tempo sync (4 bars … 1/32, triplets, dotted; locked to the host position while playing), shapes Sine, Triangle, Saw Up/Down, Square, Random, **Custom** (drawable: points + curvature, saved with the project; drawing UI in phase 5), phase offset, bipolar/unipolar |
+| Envelope / Transient / Body | Follower on the dry input, 60 dB scale. Envelope = user attack/release; Body = slow sustain; Transient = how far the level jumps above the body (3 dB threshold, silent on steady material) |
+| Chaos X / Y | Lorenz attractor; Speed (0.05–20× time) and Shape (calmer → wilder) |
+| Drift | Smooth random walk, or Sample & Hold with slew |
+| Macros 1–4 | Plain knobs to map many targets |
 
-**Matrix slot:** source → target, depth (bipolar), curve (lin/exp/S), **Flux on/off** (whether this slot travels through the field or hits all cells at once — key creative switch), optional via-source (mod-of-mod depth).
-- ~16 slots; any automatable parameter is a target, including other mod sources' rates/depths.
-- Modulation computed at control rate (every 32 samples) with per-sample smoothing of filter coefficients.
+**Matrix: 16 slots**, each with Source → Target, Depth (−1..1), Curve (Linear, Exp, Log, S-Curve), **Flux** switch and **Via** (scales the slot by another source).
+- Depth is in the target's knob range: depth 0.2 on Cutoff moves the cells as far as turning Center by 20 %.
+- **Per-cell targets:** Cutoff, Resonance, Morph, Level. With **Flux on**, the slot's movement enters the field and travels through it like the flux wave (same Travel, Direction, Viscosity, Wavelength, Turbulence, Stereo). Flux-on slots per target are summed and share one propagator.
+- **Global targets:** Spread, Tilt, Parallel/Serial, Width, Drift, Feedback, Damping, all Flux controls, Drive, Mix, Output, LFO 1–3 rate, Chaos speed, Drift rate.
+- Everything runs at control rate (every 32 samples). Modulation is added after parameter smoothing, so fast LFOs are not smeared.
+- Ranges of all continuous parameters live in `params/ParamSpec.h`, shared by the host parameters and the matrix.
 
 ## 5. Parameters (v1 list)
 Field: Density, Center, Spread, Scale, Tilt, Resonance, Cell Morph, Combine Mode, Width
 Flux: Wave Speed, Direction, Viscosity, Wavelength, Turbulence
 Character: Drive, Feedback, Damping, Drift, Character mode, Auto Gain, Limiter
 Output: Mix, Output Gain
-Mod: LFO1–3 (rate, sync, shape, phase), Env (atk, rel, sens), Chaos (speed), Drift (rate, slew), Macros 1–4, 16 matrix slots
+Mod: LFO1–3 (rate, sync, division, shape, phase, polarity), Env (attack, release, sensitivity), Chaos (speed, shape), Drift (rate, mode, slew), Macros 1–4, 16 matrix slots × (source, target, depth, curve, flux, via) — 154 parameters in total
 
 ## 6. Code structure (to build)
 ```
@@ -66,9 +70,11 @@ src/
   dsp/FluxCell.h           // nonlinear ZDF SVF with morph
   dsp/FluxField.h/.cpp     // cell array, placement scales, combine modes, feedback
   dsp/FluxPropagator.h     // per-cell mod delay + viscosity smoothing + turbulence
-  mod/LFO.h, EnvelopeFollower.h, ChaosLorenz.h, Drift.h
-  mod/ModMatrix.h/.cpp     // slots, routing, control-rate evaluation
-  params/Parameters.h      // all parameter IDs + layout in one place
+  mod/CurveShape.h         // drawable LFO shape + lock-free hand-over to the audio thread
+  mod/ModSources.h         // LFO, envelope follower, Lorenz chaos, drift
+  mod/ModMatrix.h          // slots, routing, flux propagation, control-rate evaluation
+  params/ParamSpec.h       // ranges of all continuous parameters (shared with the DSP)
+  params/Parameters.h      // IDs, choices, groups, JUCE layout
 ```
 Use JUCE `AudioProcessorValueTreeState`, `juce::dsp` utilities (SmoothedValue, ProcessSpec); write SVF ourselves (JUCE's StateVariableTPTFilter has no nonlinear loop). Add new files to `target_sources` in `CMakeLists.txt` and link `juce::juce_dsp`.
 
