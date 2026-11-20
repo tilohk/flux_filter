@@ -1,6 +1,8 @@
 #pragma once
 
 #include "FluxCell.h"
+#include "FluxLfo.h"
+#include "FluxPropagator.h"
 
 #include <array>
 #include <cmath>
@@ -33,6 +35,13 @@ struct FieldSettings
     bool  autoGain   = true;    // keep the wet signal at the input's loudness
     bool  limiter    = true;    // soft safety ceiling at 0 dBFS
 
+    // Flux: the built-in LFO and how its movement travels through the field
+    float fluxRateHz = 0.3f;
+    LfoShape fluxShape = LfoShape::Sine;
+    float fluxDepth  = 0.5f;    // cutoff movement, ± octaves
+    float fluxLevel  = 0.0f;    // 0..1, the wave also swells / ducks the cells' loudness
+    PropagationSettings propagation;
+
     float driveDb    = 0.0f;    // input saturation
     float mix        = 1.0f;    // dry/wet
     float outputDb   = 0.0f;
@@ -53,7 +62,7 @@ struct FastRandom
 
 // A field of resonant cells spread across the spectrum.
 // Coefficients are recomputed at control rate (every controlInterval samples) from smoothed
-// settings; that is also where the per-cell "flux" propagation will hook in (phase 3).
+// settings, drift and the flux wave (FluxPropagator), which moves each cell's cutoff and level.
 class FluxField
 {
 public:
@@ -75,9 +84,12 @@ public:
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         rng.seed (0x1234567u);
+        lfo.reset();
+        propagator.prepare (ticksPerSecond);
         for (auto& ch : driftWalk)   ch.fill (0.0f);
         for (auto& ch : driftSmoothed) ch.fill (0.0f);
         agGain = 1.0f;
+        for (auto& ch : levelMod) ch.fill (1.0f);
         reset();
         firstTick = true;
     }
@@ -150,6 +162,7 @@ public:
     float getCellFrequencyNow (int i, int ch = 0) const noexcept { return cellFreqNow[(size_t) ch][(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
     float getAutoGain() const noexcept { return agGain; }
+    float getFluxValue (int i, int ch = 0) const noexcept { return propagator.get (i, ch); }
 
     // Below 0.8 linear; above, a smooth knee that never exceeds ±1.
     static float safetyLimit (float x) noexcept
@@ -198,6 +211,7 @@ private:
         {
             for (int c = 0; c < activeCells; ++c)
                 par += parallelCells[(size_t) ch][(size_t) c].process (x) * cellGain[(size_t) c]
+                     * levelMod[(size_t) ch][(size_t) c]
                      * (stereo ? pan[(size_t) ch][(size_t) c] : 1.0f);
             par *= parallelNorm;
         }
@@ -208,7 +222,7 @@ private:
             for (int c = 0; c < activeCells; ++c)
             {
                 const float y = serialCells[(size_t) ch][(size_t) c].process (ser);
-                ser += (y - ser) * serialDepth[(size_t) c];
+                ser += (y - ser) * serialDepth[(size_t) c] * levelMod[(size_t) ch][(size_t) c];
             }
         }
 
@@ -260,6 +274,16 @@ private:
         glide (cur.drift, target.drift);
         glide (cur.feedback, target.feedback);
         glide (cur.damping, target.damping);
+        glide (cur.fluxDepth, target.fluxDepth);
+        glide (cur.fluxLevel, target.fluxLevel);
+        glide (cur.propagation.travelSec, target.propagation.travelSec);
+        glide (cur.propagation.viscosity, target.propagation.viscosity);
+        glide (cur.propagation.wavelength, target.propagation.wavelength);
+        glide (cur.propagation.turbulence, target.propagation.turbulence);
+        glide (cur.propagation.stereo, target.propagation.stereo);
+        cur.propagation.direction = target.propagation.direction;
+        cur.fluxRateHz = target.fluxRateHz;
+        cur.fluxShape = target.fluxShape;
         glide (cur.driveDb, target.driveDb);
         glide (cur.mix, target.mix);
         glide (cur.outputDb, target.outputDb);
@@ -322,6 +346,9 @@ private:
         }
         activeCells = newCount;
 
+        // The wave: one LFO value enters the field and propagates through the cells.
+        propagator.process (lfo.advance (cur.fluxRateHz, cur.fluxShape, tickDt), cur.propagation, activeCells);
+
         const float q = 0.5f * std::exp2 (cur.resonance * 7.0f);
         const float maxHz = 0.45f * sampleRate;
         const float stretch = cur.spread / 4.0f;
@@ -364,14 +391,22 @@ private:
             pan[0][(size_t) c] = std::min (1.0f, 1.0f + p);
             pan[1][(size_t) c] = std::min (1.0f, 1.0f - p);
 
+            // Level swell follows the wave smoothly, even in Broken (only cutoffs step there).
+            for (int ch = 0; ch < maxChannels; ++ch)
+            {
+                const float v = std::clamp (propagator.get (c, ch), -1.0f, 1.0f);
+                levelMod[(size_t) ch][(size_t) c] = 1.0f + cur.fluxLevel * (v - 1.0f) * 0.5f;
+            }
+
             if (! updateCoefficients)
                 continue;
 
             for (int ch = 0; ch < maxChannels; ++ch)
             {
-                // Mono uses channel 0's drift for both; stereo drifts L and R independently.
+                // Mono uses channel 0's drift and wave for both; stereo moves L and R independently.
                 const float d = driftSmoothed[(size_t) ch][(size_t) c] * driftOct;
-                float octs = std::log2 (f) + (ch == 0 ? detuneOct : -detuneOct) + d;
+                const float wave = propagator.get (c, ch) * cur.fluxDepth;
+                float octs = std::log2 (f) + (ch == 0 ? detuneOct : -detuneOct) + d + wave;
                 if (broken)
                     octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
                 const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
@@ -434,11 +469,14 @@ private:
     FieldSettings target, cur;
     float logCenter = 0.0f;
     FastRandom rng;
+    FluxLfo lfo;
+    FluxPropagator<maxCells, maxChannels> propagator;
 
     int activeCells = 0;
     std::array<std::array<FluxCell, maxCells>, maxChannels> parallelCells {}, serialCells {};
     std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {}, serialDepth {};
     std::array<std::array<float, maxCells>, maxChannels> pan {}, driftWalk {}, driftSmoothed {}, cellFreqNow {};
+    std::array<std::array<float, maxCells>, maxChannels> levelMod {};
 
     float parallelNorm = 1.0f, parallelWeight = 1.0f, serialWeight = 0.0f;
     float driveGain = 1.0f, driveMakeup = 1.0f, driveBlend = 0.0f, outGain = 1.0f;

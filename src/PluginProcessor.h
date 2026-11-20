@@ -59,6 +59,16 @@ private:
     std::atomic<float>* pDamping = nullptr;
     std::atomic<float>* pAutoGain = nullptr;
     std::atomic<float>* pLimiter = nullptr;
+    std::atomic<float>* pFluxRate = nullptr;
+    std::atomic<float>* pFluxShape = nullptr;
+    std::atomic<float>* pFluxDepth = nullptr;
+    std::atomic<float>* pFluxLevel = nullptr;
+    std::atomic<float>* pTravel = nullptr;
+    std::atomic<float>* pDirection = nullptr;
+    std::atomic<float>* pViscosity = nullptr;
+    std::atomic<float>* pWavelength = nullptr;
+    std::atomic<float>* pTurbulence = nullptr;
+    std::atomic<float>* pFluxStereo = nullptr;
     std::atomic<float>* pDrive = nullptr;
     std::atomic<float>* pMix = nullptr;
     std::atomic<float>* pOutput = nullptr;

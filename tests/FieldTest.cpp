@@ -65,6 +65,8 @@ int main()
                 s.scale = (CellScale) scale; s.tiltDbOct = 12.0f;
                 s.character = (Character) character; s.limiter = limiter;
                 s.feedback = 1.0f; s.drift = 1.0f; s.damping = 0.0f;
+                s.fluxDepth = 3.0f; s.fluxLevel = 1.0f; s.fluxRateHz = 20.0f; s.fluxShape = LfoShape::Random;
+                s.propagation.turbulence = 1.0f; s.propagation.wavelength = 4.0f; s.propagation.stereo = 1.0f;
                 f.setSettings (s); f.prepare (sr);
 
                 auto l = noise ((size_t) sr * 2, 1.0f, 1), r = noise ((size_t) sr * 2, 1.0f, 2);
@@ -94,7 +96,7 @@ int main()
     // 2. Resonant peaks sit on the cells: a sine on a cell passes louder than one between cells.
     {
         FieldSettings s; s.density = 8; s.centerHz = 1000.0f; s.spread = 4.0f; s.resonance = 0.85f;
-        s.morph = 1.0f; s.width = 0.0f; s.drift = 0.0f; s.autoGain = false;
+        s.morph = 1.0f; s.width = 0.0f; s.drift = 0.0f; s.autoGain = false; s.fluxDepth = 0.0f;
         FluxField probe; probe.setSettings (s); probe.prepare (sr);
         std::vector<float> tmp (64, 0.0f); probe.process (tmp.data(), nullptr, 64);
         const float onCell = probe.getCellFrequency (3);
@@ -142,7 +144,7 @@ int main()
     {
         for (float amount : { 0.0f, 1.0f })
         {
-            FieldSettings s; s.drift = amount; s.width = 0.0f;
+            FieldSettings s; s.drift = amount; s.width = 0.0f; s.fluxDepth = 0.0f;
             FluxField f; f.setSettings (s); f.prepare (sr);
             std::vector<float> buf (64, 0.0f);
             float lo = 1e9f, hi = 0.0f;
@@ -179,6 +181,88 @@ int main()
         auto w = noise (48000, 0.3f); w.resize (48000 * 4, 0.0f); run (g, w, nullptr);
         double tail0 = 0.0; for (size_t i = 48000 * 3; i < w.size(); ++i) tail0 += (double) w[i] * w[i];
         CHECK (tail0 < 1e-6, "tail without feedback should die out (%.8f)", tail0);
+    }
+
+    // 7. Flux propagation: the wave crosses the field in "travel" seconds, in the chosen direction.
+    {
+        constexpr int ticksPerSec = 48000 / FluxField::controlInterval;   // 1500
+        struct Trace { std::vector<float> first, last, firstR; };
+        auto record = [&] (FieldSettings s, float seconds) {
+            s.drift = 0.0f; s.fluxRateHz = 0.5f; s.fluxShape = LfoShape::Sine; s.density = 12;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            Trace t; std::vector<float> l (FluxField::controlInterval), r (FluxField::controlInterval);
+            for (int k = 0; k < (int) (seconds * ticksPerSec); ++k)
+            {
+                std::fill (l.begin(), l.end(), 0.0f); std::fill (r.begin(), r.end(), 0.0f);
+                f.process (l.data(), r.data(), FluxField::controlInterval);
+                t.first.push_back (f.getFluxValue (0, 0));
+                t.last.push_back (f.getFluxValue (11, 0));
+                t.firstR.push_back (f.getFluxValue (0, 1));
+            }
+            return t;
+        };
+        // Lag (seconds) by which b follows a, searched over 0..1 s, using the second half of the trace.
+        auto lagOf = [&] (const std::vector<float>& a, const std::vector<float>& b) {
+            const int n = (int) a.size(), start = n / 2; int best = 0; double bestC = -1e9;
+            for (int lag = 0; lag <= ticksPerSec; ++lag)
+            {
+                double c = 0.0;
+                for (int i = start; i < n; ++i) c += (double) a[(size_t) (i - lag)] * b[(size_t) i];
+                if (c > bestC) { bestC = c; best = lag; }
+            }
+            return (float) best / (float) ticksPerSec;
+        };
+        auto corr = [] (const std::vector<float>& a, const std::vector<float>& b) {
+            double ab = 0, aa = 0, bb = 0;
+            for (size_t i = a.size() / 2; i < a.size(); ++i) { ab += a[i] * b[i]; aa += a[i] * a[i]; bb += b[i] * b[i]; }
+            return ab / std::sqrt (aa * bb + 1e-30);
+        };
+        auto range = [] (const std::vector<float>& a) {
+            float lo = 1e9f, hi = -1e9f;
+            for (size_t i = a.size() / 2; i < a.size(); ++i) { lo = std::min (lo, a[i]); hi = std::max (hi, a[i]); }
+            return hi - lo;
+        };
+        FieldSettings base; base.propagation = { 0.0f, FluxDirection::Up, 0.0f, 0.0f, 0.0f, 0.0f };
+
+        auto t0 = record (base, 6.0f);
+        float maxDiff = 0.0f; for (size_t i = 0; i < t0.first.size(); ++i) maxDiff = std::max (maxDiff, std::abs (t0.first[i] - t0.last[i]));
+        std::printf ("flux travel 0: max difference first/last cell %.6f\n", maxDiff);
+        CHECK (maxDiff < 1e-5f, "travel 0 should move all cells together (%.6f)", maxDiff);
+
+        FieldSettings up = base; up.propagation.travelSec = 0.5f;
+        auto tu = record (up, 6.0f);
+        const float lagUp = lagOf (tu.first, tu.last);
+        std::printf ("flux up, travel 0.5 s: last cell follows first by %.3f s\n", lagUp);
+        CHECK (std::abs (lagUp - 0.5f) < 0.01f, "up lag %.3f s, expected 0.5", lagUp);
+
+        FieldSettings down = up; down.propagation.direction = FluxDirection::Down;
+        auto td = record (down, 6.0f);
+        const float lagDown = lagOf (td.last, td.first);
+        std::printf ("flux down, travel 0.5 s: first cell follows last by %.3f s\n", lagDown);
+        CHECK (std::abs (lagDown - 0.5f) < 0.01f, "down lag %.3f s, expected 0.5", lagDown);
+
+        FieldSettings wl = base; wl.propagation.wavelength = 0.5f;
+        auto tw = record (wl, 6.0f);
+        const double cw = corr (tw.first, tw.last);
+        std::printf ("flux wavelength 0.5: first/last correlation %.3f (opposite motion)\n", cw);
+        CHECK (cw < -0.99, "wavelength 0.5 should move ends in opposition (%.3f)", cw);
+
+        FieldSettings vis = base; vis.propagation.viscosity = 1.0f;
+        auto tv = record (vis, 8.0f);
+        std::printf ("flux viscosity 1: movement range first %.3f, last %.3f\n", range (tv.first), range (tv.last));
+        CHECK (range (tv.last) < range (tv.first) * 0.8f, "viscosity should smear the far end");
+
+        FieldSettings st = base; st.propagation.stereo = 1.0f;
+        auto ts = record (st, 6.0f);
+        const float lagR = lagOf (ts.first, ts.firstR);
+        std::printf ("flux stereo 1: right follows left by %.3f s\n", lagR);
+        CHECK (std::abs (lagR - 0.25f) < 0.01f, "stereo lag %.3f s, expected 0.25", lagR);
+
+        FieldSettings out = up; out.propagation.direction = FluxDirection::Outward;
+        auto to = record (out, 6.0f);
+        const float lagOut = lagOf (to.first, to.last);
+        std::printf ("flux outward: both edges arrive together (lag %.3f s)\n", lagOut);
+        CHECK (lagOut < 0.01f, "outward edges should be in sync (%.3f)", lagOut);
     }
 
     std::printf (failures == 0 ? "ALL PASSED\n" : "%d FAILURE(S)\n", failures);

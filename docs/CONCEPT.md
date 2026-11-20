@@ -17,12 +17,15 @@ in → Input Drive → [ FLUX FIELD: N resonant cells, each with own cutoff/Q/ga
 - **Combine mode:** Parallel (sum, rich formant-like) / Serial (cascade, dark & steep) / Blend.
 - **Stereo:** cells alternate or spread L/R ("Width"), plus a stereo phase offset for the flux wave.
 
-## 2. The "Flux" — what makes it move
-Each modulation value is applied to the field as a function of **cell position** `x ∈ [0,1]`:
-- **Wave Speed / Direction:** how fast modulation travels from low to high cells (or high→low, or outward from center). Implemented as a per-cell delay line on the modulation signal (cheap: control-rate ring buffer).
-- **Viscosity:** per-cell smoothing/lag — high = syrupy, slow blooms; low = sharp ripples.
-- **Wavelength:** how many "peaks" across the field at once (sine-shaped spatial distribution vs uniform).
-- **Turbulence:** small per-cell random offsets (seeded, smooth) so cells never move in perfect lockstep → organic.
+## 2. The "Flux" — what makes it move (built in phase 3)
+A source signal (for now the built-in **Flux LFO**: Rate, Shape Sine/Triangle/Ramp/Random) enters the field at one end and travels through it. Each cell reads it from a control-rate delay line at its own position on the path (`FluxPropagator`, generic so the phase 4 matrix can reuse it for any source).
+- **Flux Depth** (± octaves): how far the wave moves the cutoffs. **Flux Level** (0..1): the wave also swells/ducks each cell's loudness.
+- **Travel** (0–4 s): time for the wave to cross the field. 0 = all cells move together.
+- **Direction:** Up, Down, Outward (from the center), Inward (towards the center).
+- **Viscosity:** lag that grows along the path, so the wave smears and slows as it travels.
+- **Wavelength:** spatial cycles across the field. 0 = all cells move the same way; 0.5 = the two ends move in opposition; higher = cells breathe towards/away from each other.
+- **Turbulence:** every cell gets its own slowly changing arrival time and depth, so the wave never moves in lockstep.
+- **Flux Stereo:** the right channel hears the wave up to 250 ms later.
 
 ## 3. Organic / deep character (built in phase 2)
 - **Drift:** every cell (and L/R separately) wanders on its own slow random walk that always returns home, up to ±1/4 octave.

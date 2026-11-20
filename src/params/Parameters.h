@@ -22,6 +22,16 @@ namespace flux::params
         inline constexpr auto damping   = "damping";
         inline constexpr auto autoGain  = "autoGain";
         inline constexpr auto limiter   = "limiter";
+        inline constexpr auto fluxRate   = "fluxRate";
+        inline constexpr auto fluxShape  = "fluxShape";
+        inline constexpr auto fluxDepth  = "fluxDepth";
+        inline constexpr auto fluxLevel  = "fluxLevel";
+        inline constexpr auto travel     = "travel";
+        inline constexpr auto direction  = "direction";
+        inline constexpr auto viscosity  = "viscosity";
+        inline constexpr auto wavelength = "wavelength";
+        inline constexpr auto turbulence = "turbulence";
+        inline constexpr auto fluxStereo = "fluxStereo";
         inline constexpr auto drive     = "drive";
         inline constexpr auto mix       = "mix";
         inline constexpr auto output    = "output";
@@ -41,6 +51,10 @@ namespace flux::params
 
         NormalisableRange<float> centerRange (20.0f, 12000.0f);
         centerRange.setSkewForCentre (600.0f);
+        NormalisableRange<float> rateRange (0.02f, 20.0f);
+        rateRange.setSkewForCentre (1.0f);
+        NormalisableRange<float> travelRange (0.0f, 4.0f);
+        travelRange.setSkewForCentre (0.8f);
 
         auto morphText = AudioParameterFloatAttributes().withStringFromValueFunction (
             [] (float m, int) {
@@ -71,6 +85,20 @@ namespace flux::params
             std::make_unique<Float>  (ParameterID { id::damping, v }, "Damping", NormalisableRange<float> (0.0f, 1.0f), 0.3f),
             std::make_unique<Bool>   (ParameterID { id::autoGain, v }, "Auto Gain", true),
             std::make_unique<Bool>   (ParameterID { id::limiter, v }, "Limiter", true),
+            std::make_unique<Float>  (ParameterID { id::fluxRate, v }, "Flux Rate", rateRange, 0.3f, hz),
+            std::make_unique<Choice> (ParameterID { id::fluxShape, v }, "Flux Shape",
+                                      StringArray { "Sine", "Triangle", "Ramp", "Random" }, 0),
+            std::make_unique<Float>  (ParameterID { id::fluxDepth, v }, "Flux Depth", NormalisableRange<float> (-3.0f, 3.0f, 0.001f), 0.5f,
+                                      AudioParameterFloatAttributes().withLabel ("oct")),
+            std::make_unique<Float>  (ParameterID { id::fluxLevel, v }, "Flux Level", NormalisableRange<float> (0.0f, 1.0f), 0.0f),
+            std::make_unique<Float>  (ParameterID { id::travel, v }, "Travel", travelRange, 0.8f,
+                                      AudioParameterFloatAttributes().withLabel ("s")),
+            std::make_unique<Choice> (ParameterID { id::direction, v }, "Direction",
+                                      StringArray { "Up", "Down", "Outward", "Inward" }, 0),
+            std::make_unique<Float>  (ParameterID { id::viscosity, v }, "Viscosity", NormalisableRange<float> (0.0f, 1.0f), 0.2f),
+            std::make_unique<Float>  (ParameterID { id::wavelength, v }, "Wavelength", NormalisableRange<float> (0.0f, 4.0f, 0.001f), 0.0f),
+            std::make_unique<Float>  (ParameterID { id::turbulence, v }, "Turbulence", NormalisableRange<float> (0.0f, 1.0f), 0.2f),
+            std::make_unique<Float>  (ParameterID { id::fluxStereo, v }, "Flux Stereo", NormalisableRange<float> (0.0f, 1.0f), 0.3f),
             std::make_unique<Float>  (ParameterID { id::drive, v }, "Drive", NormalisableRange<float> (0.0f, 24.0f, 0.01f), 0.0f, db),
             std::make_unique<Float>  (ParameterID { id::mix, v }, "Mix", NormalisableRange<float> (0.0f, 1.0f), 1.0f),
             std::make_unique<Float>  (ParameterID { id::output, v }, "Output", NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, db));
