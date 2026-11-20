@@ -5,6 +5,7 @@
 #include "params/ParamSpec.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 
 namespace flux
@@ -184,7 +185,13 @@ public:
 
         for (int i = 0; i < ModSettings::numMacros; ++i)
             values[(size_t) ModSource::Macro1 + (size_t) i] = settings.macros[(size_t) i];
+
+        for (size_t i = 0; i < values.size(); ++i)
+            published[i].store (values[i], std::memory_order_relaxed);
     }
+
+    // For the UI: the latest value of a source, readable from any thread.
+    float publishedSource (ModSource s) const noexcept { return published[(size_t) s].load (std::memory_order_relaxed); }
 
     void computeSlots() noexcept
     {
@@ -265,6 +272,7 @@ private:
     DriftSource drift;
 
     std::array<float, (size_t) ModSource::Count> values {};
+    std::array<std::atomic<float>, (size_t) ModSource::Count> published {};
     std::array<float, (size_t) ModTarget::Count> globalOffset {};
     std::array<float, numCellTargets> cellDirect {}, fluxInput {};
     std::array<FluxPropagator<MaxCells, MaxChannels>, numCellTargets> propagators;

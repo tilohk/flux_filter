@@ -41,6 +41,10 @@ public:
     flux::CurveShape getCustomShape (int lfoIndex) const;
     void setCustomShape (int lfoIndex, const flux::CurveShape& shape);
 
+    // Live data for the UI (lock-free, any thread).
+    const flux::FluxField::Snapshot& getFieldSnapshot() const noexcept { return field.getSnapshot(); }
+    float getModSourceValue (flux::ModSource s) const noexcept { return field.getMatrix().publishedSource (s); }
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:

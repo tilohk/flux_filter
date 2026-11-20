@@ -6,6 +6,7 @@
 #include "mod/ModMatrix.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 
@@ -72,6 +73,13 @@ public:
     static constexpr int controlInterval = 32;
     static constexpr float wetCeiling = 4.0f, invWetCeiling = 1.0f / wetCeiling;
     using Matrix = ModMatrix<maxCells, maxChannels>;
+
+    // What the UI shows: written by the audio thread every control tick, read by the UI at any time.
+    struct Snapshot
+    {
+        std::atomic<int> activeCells { 0 };
+        std::array<std::array<std::atomic<float>, maxCells>, maxChannels> freq {}, q {}, level {};
+    };
 
     void prepare (double newSampleRate) noexcept
     {
@@ -176,6 +184,7 @@ public:
     float getAutoGain() const noexcept { return agGain; }
     float getFluxValue (int i, int ch = 0) const noexcept { return propagator.get (i, ch); }
     const Matrix& getMatrix() const noexcept { return mod; }
+    const Snapshot& getSnapshot() const noexcept { return snapshot; }
 
     // Below 0.8 linear; above, a smooth knee that never exceeds ±1.
     static float safetyLimit (float x) noexcept
@@ -337,6 +346,20 @@ private:
         }
     }
 
+    void publishSnapshot() noexcept
+    {
+        constexpr auto relaxed = std::memory_order_relaxed;
+        snapshot.activeCells.store (activeCells, relaxed);
+        for (int ch = 0; ch < maxChannels; ++ch)
+            for (int c = 0; c < activeCells; ++c)
+            {
+                const auto cc = (size_t) ch, ci = (size_t) c;
+                snapshot.freq[cc][ci].store (cellFreqNow[cc][ci], relaxed);
+                snapshot.q[cc][ci].store (cellQ[cc][ci], relaxed);
+                snapshot.level[cc][ci].store (cellGain[ci] * levelMod[cc][ci], relaxed);
+            }
+    }
+
     // Global parameters after modulation (natural units).
     FieldSettings effectiveSettings() const noexcept
     {
@@ -478,6 +501,7 @@ private:
 
                 auto& pc = parallelCells[(size_t) ch][(size_t) c];
                 auto& sc = serialCells[(size_t) ch][(size_t) c];
+                cellQ[(size_t) ch][(size_t) c] = q;
                 pc.setCoefficients (chHz, q, sampleRate);
                 sc.setCoefficients (chHz, q, sampleRate);
                 pc.setMorph (morph);
@@ -516,6 +540,8 @@ private:
         const float dampHz = std::min (20000.0f * std::exp2 (-e.damping * 5.3f), maxHz);
         dampCoef = 1.0f - std::exp (-2.0f * 3.14159265f * dampHz / sampleRate);
 
+        publishSnapshot();
+
         driveGain = std::pow (10.0f, e.driveDb / 20.0f);
         driveMakeup = 1.0f / std::sqrt (driveGain);
         driveBlend = std::min (1.0f, e.driveDb / 6.0f);
@@ -542,7 +568,8 @@ private:
     std::array<std::array<FluxCell, maxCells>, maxChannels> parallelCells {}, serialCells {};
     std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {}, serialDepth {};
     std::array<std::array<float, maxCells>, maxChannels> pan {}, driftWalk {}, driftSmoothed {}, cellFreqNow {};
-    std::array<std::array<float, maxCells>, maxChannels> levelMod {};
+    std::array<std::array<float, maxCells>, maxChannels> levelMod {}, cellQ {};
+    Snapshot snapshot;
 
     float parallelNorm = 1.0f, parallelWeight = 1.0f, serialWeight = 0.0f;
     float driveGain = 1.0f, driveMakeup = 1.0f, driveBlend = 0.0f, outGain = 1.0f;

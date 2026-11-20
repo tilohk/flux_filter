@@ -3,6 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "ParamSpec.h"
+
+#include <optional>
 #include "mod/ModMatrix.h"
 
 // Parameter IDs and the layout. Continuous ranges come from ParamSpec.h (shared with the DSP);
@@ -26,6 +28,42 @@ namespace flux::params
 
     inline const char* floatId (spec::FP p) { return spec::get (p).id; }
 
+    // Ranges are exact constants, so exact comparison is what we want here.
+    inline bool isUnitRange (const spec::FloatSpec& s)    { return juce::exactlyEqual (s.min, 0.0f) && juce::exactlyEqual (s.max, 1.0f); }
+    inline bool isBipolarRange (const spec::FloatSpec& s) { return juce::exactlyEqual (s.min, -1.0f) && juce::exactlyEqual (s.max, 1.0f); }
+
+    // Display text for a continuous parameter, chosen from its unit and range.
+    inline juce::String formatValue (const spec::FloatSpec& s, float v)
+    {
+        using juce::String;
+        if (std::abs (v) < 0.0005f) v = 0.0f;   // no "-0.00"
+        const juce::String label (s.label);
+        if (label == "Hz")
+        {
+            if (v >= 1000.0f) return String (v / 1000.0f, 2) + " kHz";
+            return String (v, v < 10.0f ? 2 : v < 100.0f ? 1 : 0) + " Hz";
+        }
+        if (label == "ms")   return String (v, v < 10.0f ? 1 : 0) + " ms";
+        if (label == "dB")   return String (v, 1) + " dB";
+        if (label == "dB/oct") return String (v, 1) + " dB/oct";
+        if (label == "s")    return String (v, 2) + " s";
+        if (label == "oct")  return (v > 0.0f ? "+" : "") + String (v, 2) + " oct";
+        if (isUnitRange (s))    return String (juce::roundToInt (v * 100.0f)) + " %";
+        if (isBipolarRange (s)) return (v > 0.0f ? "+" : "") + String (juce::roundToInt (v * 100.0f)) + " %";
+        return String (v, 2);
+    }
+
+    // Inverse of formatValue for typed input: "50 %", "2.5k", "300 ms", "-3 dB" all work.
+    inline float parseValue (const spec::FloatSpec& s, const juce::String& text)
+    {
+        const auto t = text.trim().toLowerCase();
+        float v = t.getFloatValue();
+        if (t.containsChar ('k') && juce::String (s.label) == "Hz") v *= 1000.0f;
+        if (t.containsChar ('%') || ((isUnitRange (s) || isBipolarRange (s)) && std::abs (v) > 1.0f))
+            v /= 100.0f;
+        return juce::jlimit (s.min, s.max, v);
+    }
+
     template <size_t N>
     inline juce::StringArray names (const char* const (&list)[N])
     {
@@ -40,11 +78,14 @@ namespace flux::params
         using spec::FP;
         constexpr int v = 1; // parameter version hint for AU/VST3
 
-        auto floatParam = [] (FP p, AudioParameterFloatAttributes attr = {}) {
+        auto floatParam = [] (FP p, std::optional<AudioParameterFloatAttributes> custom = std::nullopt) {
             const auto& s = spec::get (p);
             NormalisableRange<float> range (s.min, s.max, s.interval);
             if (s.centre > 0.0f)
                 range.setSkewForCentre (s.centre);
+            auto attr = custom.value_or (AudioParameterFloatAttributes()
+                .withStringFromValueFunction ([&s] (float x, int) { return formatValue (s, x); })
+                .withValueFromStringFunction ([&s] (const String& t) { return parseValue (s, t); }));
             if (*s.label != 0)
                 attr = attr.withLabel (s.label);
             return std::make_unique<AudioParameterFloat> (ParameterID { s.id, v }, s.name, range, s.def, attr);
@@ -138,10 +179,13 @@ namespace flux::params
         {
             const String n = "Slot " + String (i + 1);
             NormalisableRange<float> depthRange (spec::slotDepth.min, spec::slotDepth.max);
+            const auto depthText = AudioParameterFloatAttributes()
+                .withStringFromValueFunction ([] (float x, int) { return formatValue (spec::slotDepth, x); })
+                .withValueFromStringFunction ([] (const String& t) { return parseValue (spec::slotDepth, t); });
             layout.add (std::make_unique<AudioProcessorParameterGroup> ("slot" + String (i + 1), n, "|",
                 choice (id::slot (i, "Source"), n + " Source", names (modSourceNames), 0),
                 choice (id::slot (i, "Target"), n + " Target", names (modTargetNames), 0),
-                std::make_unique<AudioParameterFloat> (ParameterID { id::slot (i, "Depth"), v }, n + " Depth", depthRange, 0.0f),
+                std::make_unique<AudioParameterFloat> (ParameterID { id::slot (i, "Depth"), v }, n + " Depth", depthRange, 0.0f, depthText),
                 choice (id::slot (i, "Curve"), n + " Curve", names (modCurveNames), 0),
                 toggle (id::slot (i, "Flux"), n + " Flux", false),
                 choice (id::slot (i, "Via"), n + " Via", names (modSourceNames), 0)));

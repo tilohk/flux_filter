@@ -36,6 +36,11 @@ target_sources(FluxFilter PRIVATE
         src/mod/CurveShape.h
         src/mod/ModSources.h
         src/mod/ModMatrix.h
+        src/ui/FluxLookAndFeel.h
+        src/ui/ParamControl.h
+        src/ui/FieldView.h
+        src/ui/ModWidgets.h
+        src/ui/MatrixView.h
 )
 
 target_include_directories(FluxFilter PRIVATE src)

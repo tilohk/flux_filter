@@ -62,11 +62,21 @@ Character: Drive, Feedback, Damping, Drift, Character mode, Auto Gain, Limiter
 Output: Mix, Output Gain
 Mod: LFO1–3 (rate, sync, division, shape, phase, polarity), Env (attack, release, sensitivity), Chaos (speed, shape), Drift (rate, mode, slew), Macros 1–4, 16 matrix slots × (source, target, depth, curve, flux, via) — 154 parameters in total
 
+## 5b. UI (built in phase 5)
+- **Always visible:** live field display. Every cell is drawn as a resonance peak at its current frequency (width from its Q, height from its level), left channel teal, right magenta, so drift, waves and stereo movement are visible.
+- **Field tab:** Field, Character, Flux and Output sections.
+- **Modulation tab:** LFO 1–3 each with a curve editor (drag points, Shift-drag bends a segment, double-click adds/removes; used when Shape = Custom) and a live value marker; Envelope, Chaos and Drift with live meters; Macros.
+- **Matrix tab:** 16 rows with Source, Target, Depth, Curve, Flux (only enabled for cell targets), Via and a live Amount bar.
+- Values show in their units (Hz/kHz, ms, dB, %, oct, s) and accept typed input such as `2.5k`, `50 %`, `-3 dB`.
+- Live data reaches the UI lock-free: the audio thread writes cell frequency/Q/level and every mod source value into atomics each control tick.
+- Dev aid (debug builds only): run the Standalone with `FLUXFILTER_UI_SNAPSHOT=<dir>` to render every tab to PNG.
+
 ## 6. Code structure (to build)
 ```
 src/
   PluginProcessor.*        // APVTS, process loop, state save/load
-  PluginEditor.*           // v1: simple layout of knobs + matrix table
+  PluginEditor.*           // header, field display, Field / Modulation / Matrix tabs
+  ui/                      // look and feel, parameter controls, field display, curve editor, meters, matrix table
   dsp/FluxCell.h           // nonlinear ZDF SVF with morph
   dsp/FluxField.h/.cpp     // cell array, placement scales, combine modes, feedback
   dsp/FluxPropagator.h     // per-cell mod delay + viscosity smoothing + turbulence
