@@ -19,35 +19,35 @@ inline constexpr const char* modSourceNames[] = { "None", "LFO 1", "LFO 2", "LFO
 enum class ModTarget : int
 {
     None = 0,
-    Cutoff, Resonance, Morph,                                  // per cell
-    Spread, Width, Feedback, Damping,
+    Vowel, Resonance, Scatter,                                 // per cell
+    Size, Width, Feedback, Damping,
     FluxRate, FluxAmount, Travel, Viscosity, Wavelength, Turbulence, FluxStereo,
     Drive, Mix, Output,
     Lfo1Rate, Lfo2Rate, Lfo3Rate,
     Count
 };
 inline constexpr const char* modTargetNames[] = {
-    "None", "Center (cells)", "Resonance (cells)", "Morph (cells)",
-    "Spread", "Width", "Feedback", "Damping",
+    "None", "Vowel (cells)", "Resonance (cells)", "Scatter (cells)",
+    "Size", "Width", "Feedback", "Damping",
     "Flux Rate", "Flux", "Travel", "Viscosity", "Wavelength", "Turbulence", "Flux Stereo",
     "Drive", "Mix", "Output",
     "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate"
 };
 
-inline constexpr int numCellTargets = 3;   // Cutoff, Resonance, Morph
-inline constexpr bool isCellTarget (ModTarget t) noexcept { return t >= ModTarget::Cutoff && t <= ModTarget::Morph; }
+inline constexpr int numCellTargets = 3;   // Vowel, Resonance, Scatter
+inline constexpr bool isCellTarget (ModTarget t) noexcept { return t >= ModTarget::Vowel && t <= ModTarget::Scatter; }
 inline constexpr bool isLfo (ModSource s) noexcept { return s >= ModSource::Lfo1 && s <= ModSource::Lfo3; }
 
-// The parameter (knob) a target modulates. Cell cutoff lives on the Center knob.
+// The parameter (knob) a target modulates.
 inline spec::FP targetParam (ModTarget t) noexcept
 {
     using spec::FP;
     switch (t)
     {
-        case ModTarget::Cutoff:     return FP::Center;
+        case ModTarget::Vowel:      return FP::Vowel;
         case ModTarget::Resonance:  return FP::Resonance;
-        case ModTarget::Morph:      return FP::Morph;
-        case ModTarget::Spread:     return FP::Spread;
+        case ModTarget::Scatter:    return FP::Scatter;
+        case ModTarget::Size:       return FP::Size;
         case ModTarget::Width:      return FP::Width;
         case ModTarget::Feedback:   return FP::Feedback;
         case ModTarget::Damping:    return FP::Damping;
@@ -162,7 +162,7 @@ public:
             if (isCellTarget (slot.target))
             {
                 // The LFO's Flux amount decides how much of the movement travels through the field.
-                const auto k = (size_t) slot.target - (size_t) ModTarget::Cutoff;
+                const auto k = (size_t) slot.target - (size_t) ModTarget::Vowel;
                 const float f = fluxShare (slot.source);
                 fluxInput[k] += amount * f;
                 cellDirect[k] += amount * (1.0f - f);
@@ -191,7 +191,7 @@ public:
     // Normalised offset for a per-cell target (direct connections + the flux wave at this cell).
     float cell (ModTarget t, int c, int ch) const noexcept
     {
-        const auto k = (size_t) t - (size_t) ModTarget::Cutoff;
+        const auto k = (size_t) t - (size_t) ModTarget::Vowel;
         return cellDirect[k] + propagators[k].get (c, ch);
     }
 

@@ -199,7 +199,7 @@ public:
             addAndMakeVisible (b);
             att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (ctx.state, paramId, b);
         };
-        pill (autoGain, "AUTO", params::id::autoGain, "Auto Gain: keep the wet signal at the input's loudness", autoGainAtt);
+        pill (autoGain, "AUTO", params::id::autoGain, "Auto Gain: turns the filtered signal down when resonance, drive or feedback make it louder than the input (never up)", autoGainAtt);
         pill (limiter, "LIMIT", params::id::limiter, "Soft safety limiter at 0 dBFS", limiterAtt);
         for (auto* c : std::initializer_list<juce::Component*> { &meter, &mix, &output })
             addAndMakeVisible (c);

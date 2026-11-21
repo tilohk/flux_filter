@@ -62,21 +62,16 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
 {
     FieldSettings s;
     s.density   = (int) pDensity->load();
-    s.centerHz  = value (FP::Center);
-    s.spread    = value (FP::Spread);
-    s.scale     = CellScale::Log;
-    s.tiltDbOct = 0.0f;   // tilt and serial blend are not exposed (cells form a flat, parallel bank)
+    s.vowel     = value (FP::Vowel);
+    s.sizeOct   = value (FP::Size);
     s.resonance = value (FP::Resonance);
-    s.morph     = value (FP::Morph);
-    s.combine   = 0.0f;
+    s.scatter   = value (FP::Scatter);
     s.width     = value (FP::Width);
     s.character = (Character) (int) pCharacter->load();
     s.feedback  = value (FP::Feedback);
     s.damping   = value (FP::Damping);
     s.autoGain  = pAutoGain->load() > 0.5f;
     s.limiter   = pLimiter->load() > 0.5f;
-    s.fluxRateHz = value (FP::FluxRate);
-    s.fluxShape  = (LfoShape) (int) pFluxShape->load();
     s.fluxAmount = value (FP::FluxAmount);
     s.propagation.travelSec  = value (FP::Travel);
     s.propagation.direction  = (FluxDirection) (int) pDirection->load();

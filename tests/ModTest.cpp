@@ -44,13 +44,13 @@ int main()
 {
     // 1. Parameter normalisation matches the knob: centre value sits at 0.5, round trip is exact.
     {
-        const auto& c = spec::get (spec::FP::Center);
-        CHECK (std::abs (c.to01 (600.0f) - 0.5f) < 1e-4f, "center skew: 600 Hz at %.4f", c.to01 (600.0f));
+        const auto& c = spec::get (spec::FP::Lfo1Rate);
+        CHECK (std::abs (c.to01 (1.0f) - 0.5f) < 1e-4f, "rate skew: 1 Hz at %.4f", c.to01 (1.0f));
         float worst = 0.0f;
-        for (float v : { 20.0f, 100.0f, 600.0f, 3000.0f, 12000.0f })
+        for (float v : { 0.01f, 0.1f, 1.0f, 5.0f, 30.0f })
             worst = std::max (worst, std::abs (c.from01 (c.to01 (v)) - v) / v);
-        CHECK (worst < 1e-4f, "center round trip error %.6f", worst);
-        std::printf ("param spec: center 600 Hz → %.3f, round-trip error %.2e\n", c.to01 (600.0f), worst);
+        CHECK (worst < 1e-4f, "rate round trip error %.6f", worst);
+        std::printf ("param spec: LFO rate 1 Hz → %.3f, round-trip error %.2e\n", c.to01 (1.0f), worst);
     }
 
     // 2. LFO: rate, polarity, tempo sync locked to the host position.
@@ -106,7 +106,7 @@ int main()
         CHECK (std::abs (m.global (ModTarget::Mix) - 0.75f * lfo) < 1e-6f, "mix offset %.3f", m.global (ModTarget::Mix));
         CHECK (std::abs (m.global (ModTarget::Width) + lfo) < 1e-6f, "width offset %.3f", m.global (ModTarget::Width));
         CHECK (std::abs (Matrix::modulated (spec::FP::Mix, 0.8f, 0.5f) - 1.0f) < 1e-6f, "modulated value must clamp to range");
-        CHECK (targetForParam (spec::FP::Center) == ModTarget::Cutoff && targetForParam (spec::FP::Mix) == ModTarget::Mix, "knob → target map");
+        CHECK (targetForParam (spec::FP::Vowel) == ModTarget::Vowel && targetForParam (spec::FP::Mix) == ModTarget::Mix, "knob → target map");
     }
 
     // 7. The LFO's Flux switch: its cell modulation travels through the field; without Flux it doesn't.
@@ -115,12 +115,12 @@ int main()
         Matrix m; m.prepare (sr, ticksPerSec);
         ModSettings s;
         s.lfo[0].rateHz = 0.5f; s.lfo[0].flux = flux ? 1.0f : 0.0f;
-        s.slots[0] = { ModSource::Lfo1, ModTarget::Cutoff, 0.3f };
+        s.slots[0] = { ModSource::Lfo1, ModTarget::Vowel, 0.3f };
         m.setSettings (s);
         PropagationSettings p { 0.5f, FluxDirection::Up, 0.0f, 0.0f, 0.0f, 0.0f };
         std::vector<float> first, last;
         runMatrix (m, 6.0f,
-                   [&] (float) { first.push_back (m.cell (ModTarget::Cutoff, 0, 0)); last.push_back (m.cell (ModTarget::Cutoff, 11, 0)); }, p);
+                   [&] (float) { first.push_back (m.cell (ModTarget::Vowel, 0, 0)); last.push_back (m.cell (ModTarget::Vowel, 11, 0)); }, p);
         int best = 0; double bestC = -1e9;
         for (int lag = 0; lag <= (int) ticksPerSec; ++lag)
         {
@@ -128,11 +128,11 @@ int main()
             if (c > bestC) { bestC = c; best = lag; }
         }
         const float lagSec = (float) best / ticksPerSec;
-        std::printf ("matrix LFO → cutoff, flux %s: last cell lags first by %.3f s\n", flux ? "on " : "off", lagSec);
+        std::printf ("matrix LFO → vowel, flux %s: last cell lags first by %.3f s\n", flux ? "on " : "off", lagSec);
         CHECK (std::abs (lagSec - (flux ? 0.5f : 0.0f)) < 0.01f, "flux %d lag %.3f", (int) flux, lagSec);
     }
 
-    // 8. In the field: an LFO can turn the effect off via Mix; LFO → cutoff moves the cells.
+    // 8. In the field: an LFO can turn the effect off via Mix; LFO → vowel moves the cells.
     {
         FieldSettings fs; fs.mix = 1.0f; fs.limiter = false; fs.fluxAmount = 0.0f;
         ModSettings ms; ms.lfo[0].shape = ModLfoShape::Square; ms.lfo[0].rateHz = 0.25f;   // +1 for the first 2 s
@@ -146,7 +146,7 @@ int main()
         CHECK (diff < 1e-5f, "LFO to mix -1 should give dry (diff %g)", diff);
 
         ModSettings lm; lm.lfo[0].rateHz = 1.0f;
-        lm.slots[0] = { ModSource::Lfo1, ModTarget::Cutoff, 0.2f };
+        lm.slots[0] = { ModSource::Lfo1, ModTarget::Vowel, 0.2f };
         FluxField g; g.setSettings (fs); g.setModSettings (lm); g.prepare (sr);
         float lo = 1e9f, hi = 0.0f; std::vector<float> buf (tickLen);
         for (int k = 0; k < (int) (2 * ticksPerSec); ++k)
@@ -154,8 +154,8 @@ int main()
             std::fill (buf.begin(), buf.end(), 0.0f); g.process (buf.data(), nullptr, tickLen);
             lo = std::min (lo, g.getCellFrequencyNow (5)); hi = std::max (hi, g.getCellFrequencyNow (5));
         }
-        std::printf ("field: LFO → cutoff 0.2 sweeps cell 5 over %.2f octaves\n", std::log2 (hi / lo));
-        CHECK (std::log2 (hi / lo) > 1.0f, "LFO → cutoff barely moves the cell (%.2f oct)", std::log2 (hi / lo));
+        std::printf ("field: LFO → vowel 0.2 moves cell 5 over %.2f octaves\n", std::log2 (hi / lo));
+        CHECK (std::log2 (hi / lo) > 0.4f, "LFO → vowel barely moves the cell (%.2f oct)", std::log2 (hi / lo));
     }
 
     // 9. Stress: every slot busy with random routings at full depth, all flux, extreme field.

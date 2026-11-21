@@ -18,10 +18,10 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
     : ctx (p), presetBar (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
 {
     cells.add (ctx, params::id::density, "Density");
-    cells.add (ctx, id (FP::Center), "Center");
-    cells.add (ctx, id (FP::Spread), "Spread");
+    cells.add (ctx, id (FP::Vowel), "Vowel");
+    cells.add (ctx, id (FP::Size), "Size");
     cells.add (ctx, id (FP::Resonance), "Resonance");
-    cells.add (ctx, id (FP::Morph), "Morph");
+    cells.add (ctx, id (FP::Scatter), "Scatter");
     cells.add (ctx, id (FP::Width), "Width");
 
     character.add (ctx, params::id::character, "Character", true).showStepMarkers();
@@ -113,12 +113,12 @@ FluxFilterAudioProcessorEditor::FluxFilterAudioProcessorEditor (FluxFilterAudioP
                 p.presets.load (i);
             p.presets.load (1);
 
-            panel.ctx.connect (ModSource::Lfo1, ModTarget::Cutoff, 0.2f);
-            panel.ctx.connect (ModSource::Lfo3, ModTarget::Cutoff, -0.1f);
+            panel.ctx.connect (ModSource::Lfo1, ModTarget::Vowel, 0.2f);
+            panel.ctx.connect (ModSource::Lfo3, ModTarget::Vowel, -0.1f);
             panel.ctx.connect (ModSource::Lfo2, ModTarget::Resonance, 0.2f);
             panel.ctx.connect (ModSource::Lfo3, ModTarget::FluxAmount, 0.3f);
             panel.ctx.connect (ModSource::Lfo2, ModTarget::Drive, 0.3f);
-            panel.ctx.select (spec::get (FP::Center).id);
+            panel.ctx.select (spec::get (FP::Vowel).id);
 
             // Test signal for the analyser: pinkish noise plus a few partials.
             auto feed = std::make_shared<std::function<void()>>();

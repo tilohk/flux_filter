@@ -12,7 +12,10 @@ in → Input Drive → [ FLUX FIELD: N resonant cells, each with own cutoff/Q/ga
                       ↑ field shaped by: Spread · Center · Wave (Flux) · Viscosity
    → Cell Feedback loop (with Damping + soft saturation) → Mix/Dry-Wet → Output
 ```
-- **Cells:** N = 4–24 (param "Density"), each a TPT/ZDF state-variable filter (stable under fast modulation) with per-cell morph LP↔BP↔HP↔Notch. Default BP = "vocal/resonant body" sound.
+- **Cells:** N = 1–16 (param "Density"), each two TPT/ZDF state-variable filters in series (24 dB/oct skirts, stable under fast modulation) with per-cell morph LP↔BP↔HP↔Notch. Default BP = "vocal/resonant body" sound.
+  - Bandpass: both stages resonate at the full Q, so bands are narrow and the cells clearly remove what lies between and outside them (defaults on a sine: between neighbouring cells about −13 dB below a cell, outside the field −44 to −60 dB; one stage per cell gave only −21 to −26 dB outside, which sounded like an EQ boost rather than a filter).
+  - LP / HP / notch: the second stage is a plain Butterworth stage, and the resonant bump is tamed to √Q, so high resonance makes a lowpass thinner instead of +30 dB louder.
+- **Level of the field:** the field never amplifies a tone. Several hundred times a second it computes its own loudest point (all cell centres plus beyond both ends, magnitudes summed) for the current cutoffs, Q and morph, and scales the sum so that point is at most 0 dB. The old fixed makeup gave up to +21 dB on a tone sitting on a cell (whistling peaks, clipping in Live).
 - **Cell placement:** `Center` (Hz) + `Spread` (octaves), spaced logarithmically. (The DSP also has harmonic, pentatonic and inharmonic "bell" spacings; since phase 5b they have no parameter.)
 - **Combine mode:** Parallel (sum, rich formant-like) / Serial (cascade, dark & steep) / Blend.
 - **Stereo:** cells alternate or spread L/R ("Width"), plus a stereo phase offset for the flux wave.
@@ -32,8 +35,8 @@ A source signal (the built-in **Flux LFO**: Rate, Shape Sine/Triangle/Ramp/Rando
   - *Clean*: bends only at very high levels.
   - *Warm*: bends around 0 dBFS, the negative half earlier → even harmonics.
   - *Broken*: bends early and hard, cutoffs snap to a quarter-octave grid and update in steps (every 256 samples).
-- **Feedback + Damping:** the wet signal goes back into the field through a lowpass and a soft clipper. Above ~0.9 the field self-oscillates into tuned drones.
-- **Auto Gain:** matches the wet loudness to the dry input, aiming 3 dB lower (resonant peaks are spikier than the input), +12/−18 dB range, ~300 ms. It holds its value while the input is silent, so tails and drones are not pumped up.
+- **Feedback + Damping:** the wet signal goes back into the field through a lowpass and a soft clipper. Near the top the field self-oscillates into tuned drones (loop gain 1.35 × Feedback, since the field peaks just under unity).
+- **Auto Gain:** protection only: turns the wet signal down (by up to 30 dB) when resonance, drive or feedback make it louder than 3 dB under the input; it never turns up, so a filter that removes part of the spectrum sounds quieter, as it should. ~300 ms. It holds its value while the input is silent, so tails and drones are not pumped up.
 - **Safety:** DC blocker on the wet path, a soft +12 dBFS wet ceiling that is always on, and a switchable soft limiter at 0 dBFS (on by default).
 
 ## 4. Modulation system (phase 4, reworked in phase 5b)
@@ -87,7 +90,7 @@ src/
   presets/PresetManager.h  // factory presets, user preset files, host programs
   ui/                      // look and feel, knobs with mod rings, field + spectrum display, flux/output sections,
                            // LFO modules, modulation panel, preset bar, ModContext (drag and drop, connections)
-  dsp/FluxCell.h           // nonlinear ZDF SVF with morph
+  dsp/FluxCell.h           // two-stage nonlinear ZDF SVF with morph
   dsp/FluxField.h          // cell array (max 16), placement, feedback, auto gain, safety
   dsp/FluxPropagator.h     // per-cell mod delay + viscosity smoothing + turbulence
   mod/ModSources.h         // LFO
@@ -109,11 +112,11 @@ Use JUCE `AudioProcessorValueTreeState`, `juce::dsp` utilities (SmoothedValue, P
 ## Verification
 - Build in CLion / `cmake --build cmake-build-debug`, run Standalone with test audio (noise, drums, pads).
 - Check stability: max resonance + feedback + fast modulation, no NaN/blowups (add debug assertion on output).
-- CPU: `FluxBenchmark` (tests/Benchmark.cpp, -O2), stereo, block 256, % of one core (Apple Silicon, phase 6):
+- CPU: `FluxBenchmark` (tests/Benchmark.cpp, -O2), stereo, block 256, % of one core (Apple Silicon, two-stage cells):
   | | 8 cells | 16 cells | 16 cells + 16 connections |
   |---|---|---|---|
-  | 48 kHz | 0.8 % | 1.1 % | 1.3 % |
-  | 96 kHz | 1.2 % | 2.0 % | 2.4 % |
+  | 48 kHz | 0.9 % | 1.4 % | 1.6 % |
+  | 96 kHz | 1.4 % | 2.6 % | 3.0 % |
 - pluginval on VST3 + AU: passes at strictness 10 (phase 6). The AU shows only the warning "Current program is -1" (no preset selected yet), which is harmless. `auval` passes. Still to do by hand: test in Ableton Live 12.
 - Switch parameters are snapped to exactly 0/1 after a state restore (pluginval sets in-between values that JUCE's replaceState would otherwise skip).
 - Automation + state recall (save/reload project, mod matrix restored).

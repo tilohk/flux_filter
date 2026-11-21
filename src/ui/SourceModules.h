@@ -126,7 +126,7 @@ public:
         updatePolarityText();
 
         flux.getSlider().getProperties().set (heroKnobProperty, true);   // looks like the big Flux knob
-        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Center, Resonance and Morph travels "
+        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Vowel, Resonance and Scatter travels "
                                      "through the field, cell by cell (0 = all cells at once)");
         addAndMakeVisible (flux);
 

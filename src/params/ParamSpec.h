@@ -42,7 +42,7 @@ struct FloatSpec
 // Index of every continuous parameter.
 enum class FP : int
 {
-    Center, Spread, Resonance, Morph, Width,
+    Vowel, Size, Resonance, Scatter, Width,
     Feedback, Damping,
     FluxRate, FluxAmount, Travel, Viscosity, Wavelength, Turbulence, FluxStereo,
     Drive, Mix, Output,
@@ -54,10 +54,10 @@ enum class FP : int
 inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
 {
     static const std::array<FloatSpec, (size_t) FP::Count> table {{
-        { "center",     "Center",          20.0f, 12000.0f, 600.0f, 600.0f, 0.0f,  "Hz" },
-        { "spread",     "Spread",          0.0f,  8.0f,     4.0f,   0.0f,   0.01f, "" },
+        { "vowel",      "Vowel",           0.0f,  9.0f,     0.0f },                         // ring position, see dsp/FormantTable.h
+        { "size",       "Size",            -2.0f, 2.0f,     0.0f,   0.0f,   0.0f,  "oct" }, // throat size; + = bigger = lower formants
         { "resonance",  "Resonance",       0.0f,  1.0f,     0.6f },
-        { "morph",      "Morph",           0.0f,  3.0f,     1.0f },
+        { "scatter",    "Scatter",         0.0f,  1.0f,     0.0f },
         { "width",      "Width",           0.0f,  1.0f,     0.5f },
         { "feedback",   "Feedback",        0.0f,  1.0f,     0.0f },
         { "damping",    "Damping",         0.0f,  1.0f,     0.3f },

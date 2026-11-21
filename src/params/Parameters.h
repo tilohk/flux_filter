@@ -6,6 +6,7 @@
 
 #include <optional>
 #include "mod/ModMatrix.h"
+#include "dsp/FormantTable.h"
 
 // Parameter IDs and the layout. Continuous ranges come from ParamSpec.h (shared with the DSP);
 // choices and switches are defined here.
@@ -95,23 +96,38 @@ namespace flux::params
             return std::make_unique<AudioParameterBool> (ParameterID { pid, v }, name, def);
         };
 
-        // Morph: the filter type's name near each type, "BP/HP" style in between.
-        auto morphText = AudioParameterFloatAttributes().withStringFromValueFunction (
-            [] (float m, int) {
-                static const char* morphNames[] = { "LP", "BP", "HP", "Notch" };
-                const int nearest = std::clamp ((int) std::lround (m), 0, 3);
-                if (std::abs (m - (float) nearest) < 0.2f)
-                    return String (morphNames[nearest]);
-                const int lo = std::clamp ((int) m, 0, 2);
-                return String (morphNames[lo]) + "/" + morphNames[lo + 1];
+        // Vowel: the throat shape's name near each shape, "a/e" style in between (the ring wraps).
+        auto vowelText = AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float pos, int) {
+                const int n = formants::numShapes;
+                const int nearest = (int) std::lround (pos) % n;
+                if (std::abs (pos - std::round (pos)) < 0.15f)
+                    return String (formants::shapes[(size_t) nearest].name);
+                const int lo = std::clamp ((int) pos, 0, n - 1);
+                return String (formants::shapes[(size_t) lo].name) + "/" + formants::shapes[(size_t) ((lo + 1) % n)].name;
+            })
+            .withValueFromStringFunction ([] (const String& t) {
+                const auto name = t.trim().toLowerCase();
+                for (int i = 0; i < formants::numShapes; ++i)
+                    if (name == formants::shapes[(size_t) i].name)
+                        return (float) i;
+                return jlimit (0.0f, (float) formants::numShapes, name.getFloatValue());
+            });
+
+        // Size: how big the throat is, as a factor (x2 = twice as big = formants an octave lower).
+        auto sizeText = AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float oct, int) { return "x" + String (std::exp2 (oct), 2); })
+            .withValueFromStringFunction ([] (const String& t) {
+                const float f = t.trim().trimCharactersAtStart ("xX*").getFloatValue();
+                return f > 0.0f ? jlimit (-2.0f, 2.0f, std::log2 (f)) : 0.0f;
             });
 
         auto field = std::make_unique<AudioProcessorParameterGroup> ("cells", "Cells", "|",
             std::make_unique<AudioParameterInt> (ParameterID { id::density, v }, "Density", 1, 16, 8),
-            floatParam (FP::Center),
-            floatParam (FP::Spread),
+            floatParam (FP::Vowel, vowelText),
+            floatParam (FP::Size, sizeText),
             floatParam (FP::Resonance),
-            floatParam (FP::Morph, morphText),
+            floatParam (FP::Scatter),
             floatParam (FP::Width));
 
         auto character = std::make_unique<AudioProcessorParameterGroup> ("character", "Character", "|",

@@ -17,7 +17,7 @@ static double run (double sr, int density, bool busyMatrix, int block = 256, dou
     if (busyMatrix)
     {
         for (auto& l : ms.lfo) { l.rateHz = 3.0f; l.flux = 0.7f; }
-        const ModTarget targets[] = { ModTarget::Cutoff, ModTarget::Resonance, ModTarget::Morph, ModTarget::Width };
+        const ModTarget targets[] = { ModTarget::Vowel, ModTarget::Resonance, ModTarget::Scatter, ModTarget::Width };
         for (int i = 0; i < ModSettings::numSlots; ++i)
             ms.slots[(size_t) i] = { (ModSource) (1 + i % 3), targets[i % 4], 0.2f };
     }

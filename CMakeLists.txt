@@ -28,8 +28,8 @@ target_sources(FluxFilter PRIVATE
         src/PluginEditor.cpp
         src/PluginEditor.h
         src/dsp/FluxCell.h
+        src/dsp/FormantTable.h
         src/dsp/FluxField.h
-        src/dsp/FluxLfo.h
         src/dsp/FluxPropagator.h
         src/params/Parameters.h
         src/params/ParamSpec.h

@@ -1,45 +1,41 @@
 #pragma once
 
 #include "FluxCell.h"
-#include "FluxLfo.h"
 #include "FluxPropagator.h"
+#include "FormantTable.h"
 #include "mod/ModMatrix.h"
 
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 
 namespace flux
 {
 
-enum class CellScale { Log = 0, Harmonic, Bell, Pentatonic };
 enum class Character { Clean = 0, Warm, Broken };
 
 // Everything that shapes the field. Plain values, filled from the plugin parameters each block.
 struct FieldSettings
 {
-    int   density    = 8;       // number of active cells, 1..maxCells (the parameter goes up to 16)
-    float centerHz   = 600.0f;  // Log: middle of the field. Other scales: lowest cell (root)
-    float spread     = 4.0f;    // Log: span in octaves. Other scales: stretch, 4 = natural ratios
-    CellScale scale  = CellScale::Log;
-    float tiltDbOct  = 0.0f;    // gain tilt across the field, dB per octave away from center
-    float resonance  = 0.6f;    // 0..1 → Q 0.5..64
-    float morph      = 1.0f;    // 0 LP · 1 BP · 2 HP · 3 Notch
-    float combine    = 0.0f;    // 0 = parallel bank, 1 = serial chain, between = blend
-    float width      = 0.5f;    // stereo: L/R cutoff offset + alternating pan (parallel)
+    int   density    = 8;       // number of active cells, 1..maxCells; also sets the number of formants
+    float vowel      = 0.0f;    // ring position 0..9 through the throat shapes (dsp/FormantTable.h)
+    float sizeOct    = 0.0f;    // throat size, -2..+2 octaves: + = bigger throat = lower formants
+    float resonance  = 0.6f;    // 0..1, scales the formant bandwidths (0.6 = the table's bandwidths)
+    float scatter    = 0.0f;    // 0 = cells sit on their formants, 1 = free, irregular positions
+    float width      = 0.5f;    // stereo: L/R cutoff offset + alternating pan
 
     // Organic layer
     Character character = Character::Warm;
     float feedback   = 0.0f;    // 0..1, wet signal back into the field; near 1 it self-oscillates
     float damping    = 0.3f;    // 0..1, darkens the feedback path
-    bool  autoGain   = true;    // keep the wet signal at the input's loudness
+    bool  autoGain   = true;    // turn the wet signal down when it gets louder than the input (never up)
     bool  limiter    = true;    // soft safety ceiling at 0 dBFS
 
-    // Flux: the built-in LFO and how its movement travels through the field
-    float fluxRateHz = 0.3f;
-    LfoShape fluxShape = LfoShape::Sine;
-    float fluxAmount = 0.25f;   // 0..1: how strongly the wave moves the field (cutoff ± up to 2 oct, plus level)
+    // Flux: how alive the field is (v2 phase 2 onwards; not used by the field yet).
+    float fluxAmount = 0.25f;
+    // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
     PropagationSettings propagation;
 
     float driveDb    = 0.0f;    // input saturation
@@ -60,9 +56,12 @@ struct FastRandom
     float nextGaussianish() noexcept { return (nextBipolar() + nextBipolar() + nextBipolar()) * 1.0f; } // σ ≈ 1
 };
 
-// A field of resonant cells spread across the spectrum.
-// Coefficients are recomputed at control rate (every controlInterval samples) from smoothed
-// settings and the flux wave (FluxPropagator), which moves each cell's cutoff and level.
+// A field of resonant cells grouped into formants: a throat that shapes any input into vowels.
+// The cells are divided among 1–5 formants (by Density). The cells of one formant are slightly
+// detuned around its centre, so a formant is a broad, uneven hump rather than one sharp peak.
+// Vowel, Size and Resonance pick the formants from the throat table; Scatter pulls the cells away
+// from them to free, irregular positions. Coefficients are recomputed at control rate (every
+// controlInterval samples) from smoothed settings and the modulation.
 class FluxField
 {
 public:
@@ -70,7 +69,6 @@ public:
     static constexpr int maxChannels = 2;
     static constexpr int controlInterval = 32;
     static constexpr float wetCeiling = 4.0f, invWetCeiling = 1.0f / wetCeiling;
-    static constexpr float fluxMaxOctaves = 2.0f, fluxMaxLevel = 0.6f;
     using Matrix = ModMatrix<maxCells, maxChannels>;
 
     // What the UI shows: written by the audio thread every control tick, read by the UI at any time.
@@ -91,19 +89,17 @@ public:
         envCoef      = 1.0f - std::exp (-1.0f / (0.3f * sampleRate));   // loudness detectors, per sample
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
-        lfo.reset();
-        propagator.prepare (ticksPerSecond);
         mod.prepare (sampleRate, ticksPerSecond);
         agGain = 1.0f;
         for (auto& ch : levelMod) ch.fill (1.0f);
         reset();
         firstTick = true;
+        makeupCounter = 0;
     }
 
     void reset() noexcept
     {
-        for (auto& ch : parallelCells) for (auto& c : ch) c.reset();
-        for (auto& ch : serialCells)   for (auto& c : ch) c.reset();
+        for (auto& ch : cells) for (auto& c : ch) c.reset();
         fbState.fill (0.0f); dampState.fill (0.0f); dcX.fill (0.0f); dcY.fill (0.0f);
         inPow = wetPow = 0.0f;
         samplesUntilTick = 0;
@@ -143,7 +139,7 @@ public:
                 fbState[(size_t) ch] = wet;
                 wetCh[ch] = wet;
                 inSq += dry * dry;
-                wetSq += wet * wet;
+                wetSq += wet * wet * makeup * makeup;
             }
 
             // Linked loudness detectors (keep the stereo image intact).
@@ -154,7 +150,7 @@ public:
             {
                 const float dry = chans[ch][i];
                 // Soft wet ceiling at +12 dBFS (transparent below ~0 dBFS), even with the limiter off.
-                const float wet = wetCeiling * softClip (wetCh[ch] * agGain * invWetCeiling);
+                const float wet = wetCeiling * softClip (wetCh[ch] * makeup * agGain * invWetCeiling);
                 float out = (dry + (wet - dry) * effMix) * outGain;
                 blockPeakPre[(size_t) ch] = std::max (blockPeakPre[(size_t) ch], std::abs (out));
                 if (cur.limiter)
@@ -172,11 +168,14 @@ public:
     }
 
     // For tests / future visualiser (audio thread only).
-    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before modulation
+    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before modulation and width
     float getCellFrequencyNow (int i, int ch = 0) const noexcept { return cellFreqNow[(size_t) ch][(size_t) i]; }
+    float getCellQ (int i, int ch = 0) const noexcept { return cellQ[(size_t) ch][(size_t) i]; }
+    float getCellGain (int i) const noexcept { return cellGain[(size_t) i]; }
+    int   getCellFormant (int i) const noexcept { return formantOf[(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
+    float getMakeupDb() const noexcept { return 20.0f * std::log10 (makeup); }
     float getAutoGain() const noexcept { return agGain; }
-    float getFluxValue (int i, int ch = 0) const noexcept { return propagator.get (i, ch); }
     const Matrix& getMatrix() const noexcept { return mod; }
     const Snapshot& getSnapshot() const noexcept { return snapshot; }
 
@@ -225,52 +224,12 @@ private:
 
     float processWet (float x, int ch) noexcept
     {
-        float par = 0.0f, ser = 0.0f;
-
-        if (parallelWeight > 0.0f)
-        {
-            for (int c = 0; c < activeCells; ++c)
-                par += parallelCells[(size_t) ch][(size_t) c].process (x) * cellGain[(size_t) c]
-                     * levelMod[(size_t) ch][(size_t) c]
-                     * (stereo ? pan[(size_t) ch][(size_t) c] : 1.0f);
-            par *= parallelNorm;
-        }
-
-        if (serialWeight > 0.0f)
-        {
-            ser = x;
-            for (int c = 0; c < activeCells; ++c)
-            {
-                const float y = serialCells[(size_t) ch][(size_t) c].process (ser);
-                ser += (y - ser) * serialDepth[(size_t) c] * levelMod[(size_t) ch][(size_t) c];
-            }
-        }
-
-        return par * parallelWeight + ser * serialWeight;
-    }
-
-    static float cellRatio (CellScale scale, int i, float stretch) noexcept
-    {
-        switch (scale)
-        {
-            case CellScale::Harmonic:
-                return std::pow ((float) (i + 1), stretch);
-            case CellScale::Bell:
-            {
-                // Free-bar style inharmonic partials: 1, 2.78, 5.44, 9, 13.4, ...
-                const float r = (2.0f * (float) i + 3.0f) / 3.0f;
-                return std::pow (r * r, stretch);
-            }
-            case CellScale::Pentatonic:
-            {
-                static constexpr int degrees[5] = { 0, 3, 5, 7, 10 };
-                const float semis = 12.0f * (float) (i / 5) + (float) degrees[i % 5];
-                return std::exp2 (semis * stretch / 12.0f);
-            }
-            case CellScale::Log:
-            default:
-                return 1.0f; // handled separately
-        }
+        float sum = 0.0f;
+        for (int c = 0; c < activeCells; ++c)
+            sum += cells[(size_t) ch][(size_t) c].process (x) * cellGain[(size_t) c]
+                 * levelMod[(size_t) ch][(size_t) c]
+                 * (stereo ? pan[(size_t) ch][(size_t) c] : 1.0f);
+        return sum * fieldNorm;
     }
 
     void smoothTowardsTarget() noexcept
@@ -278,18 +237,14 @@ private:
         if (firstTick)
         {
             cur = target;
-            logCenter = std::log2 (target.centerHz);
             firstTick = false;
             return;
         }
         auto glide = [this] (float& v, float t) { v += (t - v) * smoothCoef; };
-        logCenter += (std::log2 (target.centerHz) - logCenter) * smoothCoef;
-        cur.centerHz = std::exp2 (logCenter);
-        glide (cur.spread, target.spread);
-        glide (cur.tiltDbOct, target.tiltDbOct);
+        glide (cur.vowel, target.vowel);
+        glide (cur.sizeOct, target.sizeOct);
         glide (cur.resonance, target.resonance);
-        glide (cur.morph, target.morph);
-        glide (cur.combine, target.combine);
+        glide (cur.scatter, target.scatter);
         glide (cur.width, target.width);
         glide (cur.feedback, target.feedback);
         glide (cur.damping, target.damping);
@@ -300,12 +255,9 @@ private:
         glide (cur.propagation.turbulence, target.propagation.turbulence);
         glide (cur.propagation.stereo, target.propagation.stereo);
         cur.propagation.direction = target.propagation.direction;
-        cur.fluxRateHz = target.fluxRateHz;
-        cur.fluxShape = target.fluxShape;
         glide (cur.driveDb, target.driveDb);
         glide (cur.mix, target.mix);
         glide (cur.outputDb, target.outputDb);
-        cur.scale = target.scale;
         cur.density = target.density;
         cur.character = target.character;
         cur.autoGain = target.autoGain;
@@ -322,9 +274,10 @@ private:
         // Only adapt while there is real input; tails and feedback drones keep the last gain.
         if (inPow > 1.0e-7f)
         {
-            // Aim 3 dB under the input's loudness (resonant peaks are spikier than the input),
-            // boost at most +12 dB, cut at most -18 dB.
-            const float targetAg = std::clamp (std::sqrt (inPow / (wetPow + 1.0e-12f)) * 0.708f, 0.125f, 4.0f);
+            // Protection only: when the wet signal gets louder than 3 dB under the input (resonance,
+            // drive, feedback), turn it down, by up to 30 dB. Never turn it up: a filter that removes
+            // part of the spectrum should sound quieter.
+            const float targetAg = std::clamp (std::sqrt (inPow / (wetPow + 1.0e-12f)) * 0.708f, 0.0316f, 1.0f);
             agGain += (targetAg - agGain) * agSmooth;
         }
     }
@@ -349,7 +302,7 @@ private:
         using spec::FP;
         auto m = [this] (FP p, float base, ModTarget t) { return Matrix::modulated (p, base, mod.global (t)); };
         FieldSettings e = cur;
-        e.spread    = m (FP::Spread, cur.spread, ModTarget::Spread);
+        e.sizeOct   = m (FP::Size, cur.sizeOct, ModTarget::Size);
         e.width     = m (FP::Width, cur.width, ModTarget::Width);
         e.feedback  = m (FP::Feedback, cur.feedback, ModTarget::Feedback);
         e.damping   = m (FP::Damping, cur.damping, ModTarget::Damping);
@@ -365,16 +318,97 @@ private:
         return e;
     }
 
-    static float qFromResonance (float r) noexcept { return 0.5f * std::exp2 (std::clamp (r, 0.0f, 1.0f) * 7.0f); }
+    // Resonance → bandwidth factor: 0.6 = the table's bandwidths, 0 = 12x wider, 1 = ~5x narrower.
+    static float bandwidthScale (float r) noexcept { return std::exp2 ((0.6f - std::clamp (r, 0.0f, 1.0f)) * 6.0f); }
+
+    static constexpr float minQ = 0.5f, maxQ = 64.0f;
+    static constexpr float maxDetuneOct = 1.0f / 6.0f;   // widest spread of one formant's cells
+    static constexpr float maxWidthOct = 0.1f;           // Width's widest L/R detune
+    static constexpr float jitterShare = 0.15f;          // each cell's own offset, as a share of the formant's width
+    static constexpr float freeLowOct = 6.644f;          // log2 (100 Hz): free cells live in 100 Hz…
+    static constexpr float freeSpanOct = 5.907f;         // …6 kHz (before Size)
+
+    // Fixed per-cell character, rolled once per cell index (so presets sound the same every time).
+    struct CellTraits
+    {
+        float jitter = 0.0f;     // -1..1, own detune
+        float freePos = 0.5f;    // 0..1, where it sits when scattered
+        float freeQ = 0.0f;      // -1..1, octaves of Q around the free cells' base Q
+        float freeGainDb = 0.0f; // level when scattered
+    };
+
+    static CellTraits rollTraits (int c) noexcept
+    {
+        FastRandom rng; rng.seed (0x51ED27u + 7919u * (uint32_t) c);
+        CellTraits t;
+        t.jitter = rng.nextBipolar();
+        t.freePos = 0.5f + 0.5f * rng.nextBipolar();
+        t.freeQ = rng.nextBipolar();
+        t.freeGainDb = -4.5f + 4.5f * rng.nextBipolar();
+        return t;
+    }
+
+    // Divides n cells among the formants: as even as possible, the lower formants get the extra
+    // cells. Cells stay sorted by formant, so the field reads from low to high.
+    void assignFormants (int n) noexcept
+    {
+        numFormants = formants::countFor (n);
+        const int base = n / numFormants, extra = n % numFormants;
+        int c = 0;
+        for (int k = 0; k < numFormants; ++k)
+        {
+            const int m = base + (k < extra ? 1 : 0);
+            cellsInFormant[(size_t) k] = m;
+            for (int j = 0; j < m; ++j, ++c)
+            {
+                formantOf[(size_t) c] = k;
+                // Position inside the formant, -0.5..0.5 (0 for a lone cell).
+                spreadPos[(size_t) c] = m > 1 ? (float) j / (float) (m - 1) - 0.5f : 0.0f;
+            }
+        }
+        assignedCells = n;
+    }
+
+    struct Placement { float octs, q, gainDb, widthOct; };   // widthOct: how far Width may detune L/R
+
+    // Where cell c sits for a vowel position, size, bandwidth factor and scatter amount.
+    Placement place (int c, float vowel, float sizeOct, float bwScale, float scatter) const noexcept
+    {
+        const auto k = formantOf[(size_t) c];
+        const auto fm = formants::at (vowel, k);
+        const auto& tr = traits[(size_t) c];
+        const float bw = fm.bwHz * bwScale;
+
+        // A formant's cells fan out over about half its bandwidth (at most 1/6 octave), plus a small
+        // offset of their own. Both scale with the bandwidth: a narrow (singing) formant pulls its
+        // cells together into one coherent peak; spread wider than their own bandwidth, detuned
+        // cells would partly cancel each other.
+        const float bwOct = std::log2 ((fm.hz + 0.5f * bw) / std::max (1.0f, fm.hz - 0.5f * bw));
+        const float span = std::min (0.5f * bwOct, maxDetuneOct);
+        const float formantOct = std::log2 (fm.hz) + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter);
+        // Two resonant stages: a cell's -3 dB width is about 0.64 f / Q.
+        const float formantQ = std::clamp (0.64f * fm.hz / bw, minQ, maxQ);
+        // Louder formants have more cells; share the formant's level between them.
+        const float formantDb = fm.gainDb - 10.0f * std::log10 ((float) cellsInFormant[(size_t) k]);
+
+        const float freeOct = freeLowOct + freeSpanOct * tr.freePos;
+        const float freeQ = std::clamp (4.0f / bwScale * std::exp2 (tr.freeQ), minQ, maxQ);
+
+        // Width detunes L/R by up to 0.1 octave, but no further than a third of the formant's width.
+        const float formantWidthOct = std::min (maxWidthOct, bwOct / 3.0f);
+
+        const float s = std::clamp (scatter, 0.0f, 1.0f);
+        return { formantOct + (freeOct - formantOct) * s - sizeOct,
+                 std::exp2 (std::log2 (formantQ) + (std::log2 (freeQ) - std::log2 (formantQ)) * s),
+                 formantDb + (tr.freeGainDb - formantDb) * s,
+                 formantWidthOct + (maxWidthOct - formantWidthOct) * s };
+    }
 
     void controlTick (int sampleOffset) noexcept
     {
         smoothTowardsTarget();
         updateAutoGain();
 
-        // Modulation: the flux LFO (rate uses last tick's offsets), then every source and the matrix.
-        const float fluxRate = Matrix::modulated (spec::FP::FluxRate, cur.fluxRateHz, mod.global (ModTarget::FluxRate));
-        const float fluxLfoValue = lfo.advance (fluxRate, cur.fluxShape, tickDt);
         mod.tickSources (tickDt, sampleOffset);
         mod.computeSlots();
         const FieldSettings e = effectiveSettings();
@@ -388,26 +422,18 @@ private:
         for (int c = activeCells; c < newCount; ++c)   // newly woken cells start silent
         {
             for (int ch = 0; ch < maxChannels; ++ch)
-            {
-                parallelCells[(size_t) ch][(size_t) c].reset();
-                serialCells[(size_t) ch][(size_t) c].reset();
-            }
+                cells[(size_t) ch][(size_t) c].reset();
             cellGain[(size_t) c] = 0.0f;
         }
         activeCells = newCount;
+        if (assignedCells != activeCells)
+            assignFormants (activeCells);
 
-        // The waves: the flux LFO and every connection from a Flux-enabled LFO travel through the cells.
-        propagator.process (fluxLfoValue, e.propagation, activeCells);
+        // LFO connections with a Flux share travel through the cells.
         mod.propagate (e.propagation, activeCells);
 
-        const auto& centerSpec = spec::get (spec::FP::Center);
-        const float centerNorm = centerSpec.to01 (cur.centerHz);
         const float maxHz = 0.45f * sampleRate;
-        const float stretch = e.spread / 4.0f;
-        const float serialBase = std::min (1.0f, 3.0f / (float) activeCells);
-        const float baseQ = qFromResonance (cur.resonance);   // static compensation; auto gain does the rest
-        const float fluxDepth = fluxMaxOctaves * e.fluxAmount;
-        const float fluxLevel = fluxMaxLevel * e.fluxAmount;
+        constexpr float vowelRange = (float) formants::numShapes;   // the Vowel knob spans the whole ring
 
         float satLimit = 4.0f, satAsym = 0.0f;
         switch (cur.character)
@@ -420,99 +446,111 @@ private:
 
         for (int c = 0; c < activeCells; ++c)
         {
-            float f;
-            if (cur.scale == CellScale::Log)
-            {
-                const float pos = activeCells > 1 ? (float) c / (float) (activeCells - 1) - 0.5f : 0.0f;
-                f = cur.centerHz * std::exp2 (pos * e.spread);
-            }
-            else
-            {
-                f = cur.centerHz * cellRatio (cur.scale, c, stretch);
-            }
+            // Level and the unmodulated position come from the knobs alone (shared by both channels).
+            const auto base = place (c, cur.vowel, e.sizeOct, bandwidthScale (cur.resonance), cur.scatter);
+            const float f = std::exp2 (base.octs);
             cellFreq[(size_t) c] = f;
-
             // Cells pushed above the usable range fade out instead of piling up at Nyquist.
-            const float audible = f < maxHz ? 1.0f : 0.0f;
-            const float octFromCenter = std::log2 (f / cur.centerHz);
-            const float tiltDb = std::clamp (e.tiltDbOct * octFromCenter, -24.0f, 24.0f);
-            targetGain[(size_t) c] = audible * std::pow (10.0f, tiltDb / 20.0f);
+            targetGain[(size_t) c] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) : 0.0f;
 
             // Width: alternate cells lean left/right, and L/R cutoffs move apart slightly.
             const float side = (c % 2 == 0) ? 1.0f : -1.0f;
-            const float detuneOct = 0.1f * e.width * side;
+            const float detuneOct = base.widthOct * e.width * side;
             const float p = e.width * side;                // -1..1, +1 = left
             pan[0][(size_t) c] = std::min (1.0f, 1.0f + p);
             pan[1][(size_t) c] = std::min (1.0f, 1.0f - p);
-
-            // Level follows the waves smoothly, even in Broken (only cutoffs step there).
             for (int ch = 0; ch < maxChannels; ++ch)
-            {
-                const float v = std::clamp (propagator.get (c, ch), -1.0f, 1.0f);
-                levelMod[(size_t) ch][(size_t) c] = 1.0f + fluxLevel * (v - 1.0f) * 0.5f;
-            }
+                levelMod[(size_t) ch][(size_t) c] = 1.0f;
 
             if (! updateCoefficients)
                 continue;
 
             for (int ch = 0; ch < maxChannels; ++ch)
             {
-                // Mono uses channel 0's waves for both; stereo moves L and R independently.
-                const float wave = propagator.get (c, ch) * fluxDepth;
+                // Per-cell modulation (mono uses channel 0's for both; stereo moves L and R apart).
+                const float vowelOff = mod.cell (ModTarget::Vowel, c, ch);
+                const float resOff = mod.cell (ModTarget::Resonance, c, ch);
+                const float scatterOff = mod.cell (ModTarget::Scatter, c, ch);
+                const auto pl = (vowelOff == 0.0f && resOff == 0.0f && scatterOff == 0.0f)
+                    ? base
+                    : place (c, cur.vowel + vowelRange * vowelOff, e.sizeOct,
+                             bandwidthScale (cur.resonance + resOff), cur.scatter + scatterOff);
 
-                // Cutoff modulation lives in the Center knob's range: the same offset moves a
-                // cell as far as turning Center would.
-                const float cutOff = mod.cell (ModTarget::Cutoff, c, ch);
-                const float matrixOct = cutOff != 0.0f
-                    ? std::log2 (centerSpec.from01 (centerNorm + cutOff) / cur.centerHz) : 0.0f;
-
-                float octs = std::log2 (f) + (ch == 0 ? detuneOct : -detuneOct) + wave + matrixOct;
+                float octs = pl.octs + (ch == 0 ? detuneOct : -detuneOct);
                 if (broken)
                     octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
                 const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
                 cellFreqNow[(size_t) ch][(size_t) c] = chHz;
+                cellQ[(size_t) ch][(size_t) c] = pl.q;
 
-                const float q = qFromResonance (cur.resonance + mod.cell (ModTarget::Resonance, c, ch));
-                const float morph = std::clamp (cur.morph + 3.0f * mod.cell (ModTarget::Morph, c, ch), 0.0f, 3.0f);
-
-                auto& pc = parallelCells[(size_t) ch][(size_t) c];
-                auto& sc = serialCells[(size_t) ch][(size_t) c];
-                cellQ[(size_t) ch][(size_t) c] = q;
-                pc.setCoefficients (chHz, q, sampleRate);
-                sc.setCoefficients (chHz, q, sampleRate);
-                pc.setMorph (morph);
-                sc.setMorph (morph);
+                auto& cell = cells[(size_t) ch][(size_t) c];
+                cell.setCoefficients (chHz, pl.q, sampleRate);
                 // The band state grows with Q (unity peak output = state / Q), so the limit scales
                 // with Q too: saturation then starts at the same output level at any resonance.
-                pc.setSaturation (satLimit * q, satAsym);
-                sc.setSaturation (satLimit * q, satAsym);
+                cell.setSaturation (satLimit * pl.q, satAsym);
             }
         }
 
-        // Tilt redistributes energy instead of adding it: normalise gains to unit mean-square.
-        float sumSq = 0.0f;
-        for (int c = 0; c < activeCells; ++c) sumSq += targetGain[(size_t) c] * targetGain[(size_t) c];
-        const float tiltNorm = sumSq > 1.0e-9f ? std::sqrt ((float) activeCells / sumSq) : 0.0f;
         for (int c = 0; c < activeCells; ++c)
+            cellGain[(size_t) c] += (targetGain[(size_t) c] - cellGain[(size_t) c]) * smoothCoef;
+
+        // Level: a filter must never amplify. Find the field's loudest point (every cell centre plus
+        // one octave beyond each end, summing all cells as magnitudes) and scale it to unity.
+        // Recomputed every 4th tick; drops at once, recovers smoothly.
+        if (updateCoefficients && (normCounter++ % 4) == 0)
         {
-            auto& g = cellGain[(size_t) c];
-            g += (targetGain[(size_t) c] * tiltNorm - g) * smoothCoef;
-            serialDepth[(size_t) c] = std::clamp (serialBase * g, 0.0f, 1.0f);
+            float loudest = 1.0e-6f;
+            auto probe = [&] (float hz) {
+                float sum = 0.0f;
+                for (int c = 0; c < activeCells; ++c)
+                    sum += cellGain[(size_t) c] * FluxCell::magnitude (hz / cellFreqNow[0][(size_t) c], cellQ[0][(size_t) c], 1.0f);
+                loudest = std::max (loudest, sum);
+            };
+            float lowest = maxHz, highest = 0.0f;
+            for (int c = 0; c < activeCells; ++c)
+            {
+                const float f = cellFreqNow[0][(size_t) c];
+                probe (f);
+                lowest = std::min (lowest, f);
+                highest = std::max (highest, f);
+            }
+            probe (lowest * 0.5f);
+            probe (std::min (highest * 2.0f, maxHz));
+            const float unityNorm = 1.0f / loudest;
+            fieldNorm = unityNorm < fieldNorm ? unityNorm : fieldNorm + (unityNorm - fieldNorm) * 0.2f;
         }
 
-        // Static level compensation: narrow (high-Q) bands pass less broadband energy, many cells
-        // add up. Auto-gain does the rest adaptively.
-        parallelNorm = 1.5f * std::pow (baseQ, 0.3f) / std::sqrt ((float) activeCells);
+        // Makeup: narrow formants pass little of a broadband sound. Estimate how much of a pink input
+        // (equal energy per octave, 20 Hz–20 kHz) gets through and bring that up to 3 dB under the
+        // input, by at most +12 dB, so a tone on a formant peak is never more than 12 dB louder than
+        // it came in (Auto Gain and the limiter catch the rest). Applied after the feedback loop.
+        if (updateCoefficients && (makeupCounter++ % 16) == 0)
+        {
+            float energy = 0.0f;
+            for (int i = 0; i < makeupPoints; ++i)
+            {
+                const float hz = 20.0f * std::exp2 ((float) i / makeupPointsPerOct);
+                if (hz >= maxHz) continue;
+                // Complex sum: neighbouring formants are out of phase between their peaks and
+                // partly cancel there (a magnitude sum would over-estimate what gets through).
+                std::complex<float> sum {};
+                for (int c = 0; c < activeCells; ++c)
+                {
+                    // Two bandpass stages at the same Q: (j k x / (1 - x² + j k x))²
+                    const float x = hz / cellFreqNow[0][(size_t) c], k = 1.0f / cellQ[0][(size_t) c];
+                    const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
+                    sum += cellGain[(size_t) c] * stage * stage;
+                }
+                energy += std::norm (sum);
+            }
+            const float passedDb = 10.0f * std::log10 (std::max (1.0e-12f, fieldNorm * fieldNorm * energy / (float) makeupPoints));
+            makeupTarget = std::pow (10.0f, std::clamp (makeupTargetDb - passedDb, 0.0f, maxMakeupDb) / 20.0f);
+        }
+        makeup += (makeupTarget - makeup) * smoothCoef;
 
-        const float prevSerial = serialWeight;
-        serialWeight = std::clamp (e.combine, 0.0f, 1.0f);
-        parallelWeight = 1.0f - serialWeight;
-        if (prevSerial <= 0.0f && serialWeight > 0.0f)
-            for (auto& ch : serialCells) for (auto& c : ch) c.reset();
-
-        // Feedback goes slightly above unity at the top so the field can sing on its own;
+        // Feedback goes above unity at the top so the field can sing on its own;
         // the saturation in the loop and in the cells keeps that bounded.
-        fbGain = 1.1f * e.feedback;
+        fbGain = 1.35f * e.feedback;   // the field peaks just under unity, so the top of the range self-oscillates
         const float dampHz = std::min (20000.0f * std::exp2 (-e.damping * 5.3f), maxHz);
         dampCoef = 1.0f - std::exp (-2.0f * 3.14159265f * dampHz / sampleRate);
 
@@ -533,21 +571,34 @@ private:
     uint32_t tickCounter = 0;
 
     FieldSettings target, cur;
-    float logCenter = 0.0f;
-    FluxLfo lfo;
-    FluxPropagator<maxCells, maxChannels> propagator;
     Matrix mod;
     float effMix = 1.0f;
     std::array<float, maxChannels> blockPeakPre {}, blockPeakPost {};
 
     int activeCells = 0;
-    std::array<std::array<FluxCell, maxCells>, maxChannels> parallelCells {}, serialCells {};
-    std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {}, serialDepth {};
+    std::array<std::array<FluxCell, maxCells>, maxChannels> cells {};
+    std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {};
     std::array<std::array<float, maxCells>, maxChannels> pan {}, cellFreqNow {};
     std::array<std::array<float, maxCells>, maxChannels> levelMod {}, cellQ {};
+    uint32_t normCounter = 0;
     Snapshot snapshot;
 
-    float parallelNorm = 1.0f, parallelWeight = 1.0f, serialWeight = 0.0f;
+    // Formant layout
+    const std::array<CellTraits, maxCells> traits = [] {
+        std::array<CellTraits, maxCells> t {};
+        for (int c = 0; c < maxCells; ++c) t[(size_t) c] = rollTraits (c);
+        return t;
+    }();
+    int numFormants = 1, assignedCells = 0;
+    std::array<int, maxCells> formantOf {};
+    std::array<int, formants::numFormants> cellsInFormant {};
+    std::array<float, maxCells> spreadPos {};
+
+    float fieldNorm = 1.0f;
+    static constexpr int makeupPointsPerOct = 6, makeupPoints = 10 * makeupPointsPerOct + 1;   // 20 Hz … 20.5 kHz
+    static constexpr float makeupTargetDb = -3.0f, maxMakeupDb = 12.0f;
+    float makeup = 1.0f, makeupTarget = 1.0f;
+    uint32_t makeupCounter = 0;
     float driveGain = 1.0f, driveMakeup = 1.0f, driveBlend = 0.0f, outGain = 1.0f;
 
     // Feedback loop
