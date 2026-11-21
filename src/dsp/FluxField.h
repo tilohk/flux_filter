@@ -39,6 +39,8 @@ struct FieldSettings
     float driftHz    = 0.2f;    // speed of the chaos
     float wander     = 0.5f;    // how far it roams (times Flux)
     float coupling   = 0.3f;    // how much ringing cells feed their neighbours (times Flux)
+    float feed       = 0.5f;    // life cycle driver: 0 = chance, 1 = input energy
+    float lifespanSec = 2.0f;   // mean life of a cell (chance) / how long it survives starving (energy)
     // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
     PropagationSettings propagation;
 
@@ -94,6 +96,7 @@ public:
         energyCoef   = tickCoef (0.02f);
         excAttack    = tickCoef (0.08f);
         excRelease   = tickCoef (1.5f);
+        resetLife();
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         mod.prepare (sampleRate, ticksPerSecond);
@@ -188,6 +191,9 @@ public:
     int   getCellFormant (int i) const noexcept { return formantOf[(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
     float getCellExcitation (int i) const noexcept { return excitation[(size_t) i]; }
+    float getCellVitality (int i) const noexcept { return life[(size_t) i].vitality; }
+    bool  isCellAlive (int i) const noexcept { return life[(size_t) i].alive; }
+    uint32_t getBirths() const noexcept { return births; }
     float getMakeupDb() const noexcept { return 20.0f * std::log10 (makeup); }
     float getAutoGain() const noexcept { return agGain; }
     const Matrix& getMatrix() const noexcept { return mod; }
@@ -277,6 +283,8 @@ private:
         glide (cur.damping, target.damping);
         glide (cur.fluxAmount, target.fluxAmount);
         glide (cur.wander, target.wander);
+        glide (cur.feed, target.feed);
+        cur.lifespanSec = target.lifespanSec;
         glide (cur.coupling, target.coupling);
         cur.driftHz = target.driftHz;
         glide (cur.propagation.travelSec, target.propagation.travelSec);
@@ -340,8 +348,8 @@ private:
         e.driftHz   = m (FP::Drift, cur.driftHz, ModTarget::Drift);
         e.wander    = m (FP::Wander, cur.wander, ModTarget::Wander);
         e.coupling  = m (FP::Coupling, cur.coupling, ModTarget::Coupling);
-        e.propagation.wavelength = m (FP::Wavelength, cur.propagation.wavelength, ModTarget::Wavelength);
-        e.propagation.turbulence = m (FP::Turbulence, cur.propagation.turbulence, ModTarget::Turbulence);
+        e.feed      = m (FP::Feed, cur.feed, ModTarget::Feed);
+        e.lifespanSec = m (FP::Lifespan, cur.lifespanSec, ModTarget::Lifespan);
         e.propagation.stereo     = m (FP::FluxStereo, cur.propagation.stereo, ModTarget::FluxStereo);
         e.driveDb   = m (FP::Drive, cur.driveDb, ModTarget::Drive);
         e.mix       = m (FP::Mix, cur.mix, ModTarget::Mix);
@@ -426,13 +434,18 @@ private:
         const float span = std::min (0.5f * bwOct, maxDetuneOct);
         // Life: each formant drifts on its own; openness (jaw) moves F1 most.
         const float driftOct = formantDrift[(size_t) k] + openness * (k == 0 ? opennessF1Oct : opennessOct);
-        const float formantOct = std::log2 (fm.hz) + driftOct + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter);
+        // Life: a reborn cell lands a little elsewhere in its formant (up to its whole span, times Flux).
+        const auto& lf = life[(size_t) c];
+        const float formantOct = std::log2 (fm.hz) + driftOct
+                               + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter + lifeDepth * lf.shift);
         // Two resonant stages: a cell's -3 dB width is about 0.64 f / Q.
         const float formantQ = std::clamp (0.64f * fm.hz / bw, minQ, maxQ);
         // Louder formants have more cells; share the formant's level between them.
         const float formantDb = fm.gainDb - 10.0f * std::log10 ((float) cellsInFormant[(size_t) k]);
 
-        const float freeOct = freeLowOct + freeSpanOct * tr.freePos;
+        float freePos = tr.freePos + 0.5f * lifeDepth * lf.freeShift;   // scattered: anywhere
+        freePos -= std::floor (freePos);
+        const float freeOct = freeLowOct + freeSpanOct * freePos;
         const float freeQ = std::clamp (4.0f / bwScale * std::exp2 (tr.freeQ), minQ, maxQ);
 
         // Width detunes L/R by up to 0.1 octave, but no further than a third of the formant's width.
@@ -464,6 +477,7 @@ private:
         }
         energySamples = 0;
         mean = mean / (float) activeCells + 1.0e-9f;
+        energyMean = mean;
 
         for (int c = 0; c < activeCells; ++c)
         {
@@ -483,6 +497,97 @@ private:
         bleed = maxBleed * amount;
     }
 
+    // Life cycle. Each cell is alive (vitality rises to 1) or dead (vitality falls to 0, silent),
+    // and hunger decides when it dies:
+    //   chance (Feed 0): hunger grows by itself; the cell dies after its own lifespan (0.5–1.5×
+    //                    Lifespan) and is reborn after a random rest (0.15–0.55× Lifespan).
+    //   energy (Feed 1): a cell eats the input energy in its band. Fed cells (own energy well above
+    //                    a floor and a quarter of the field's average, or excited by their neighbours)
+    //                    lose hunger, starved ones die after about Lifespan. A dead cell keeps
+    //                    listening at its new place and is reborn as soon as there is food there.
+    //                    Silence starves everything: the population dies out.
+    // Feed blends both rates. Reborn cells land elsewhere (see place()). Flux sets the depth: the
+    // cell's gain is 1 - Flux × (1 - vitality), so at Flux 0 every cell lives forever.
+    struct CellLife
+    {
+        bool  alive = true;
+        float vitality = 1.0f, hunger = 0.0f, rebirth = 0.0f;
+        float span = 1.0f, rest = 0.5f;       // own lifespan / rest, as multiples of Lifespan
+        float shift = 0.0f, freeShift = 0.0f; // where it lands, -1..1
+        bool  moved = false;                  // dead and already moved to its next place
+    };
+
+    void resetLife() noexcept
+    {
+        lifeRng.seed (0xC0FFEE11u);
+        for (auto& l : life)
+        {
+            l = CellLife {};
+            rollLife (l);
+            l.shift = l.freeShift = 0.0f;                 // the first generation sits on the knobs' layout
+            l.hunger = 0.5f * (lifeRng.nextBipolar() + 1.0f);   // staggered, so they don't all die together
+        }
+        births = 0;
+    }
+
+    void rollLife (CellLife& l) noexcept
+    {
+        l.span = 1.0f + 0.5f * lifeRng.nextBipolar();
+        l.rest = 0.35f + 0.2f * lifeRng.nextBipolar();
+        l.shift = lifeRng.nextBipolar();
+        l.freeShift = lifeRng.nextBipolar();
+    }
+
+    void updateLife (float depth, float feedAmount, float lifespan) noexcept
+    {
+        lifeDepth = depth;
+        const float dt = tickDt;
+        const float attack = std::clamp (0.15f * lifespan, 0.005f, 1.5f);
+        const float release = std::clamp (0.3f * lifespan, 0.01f, 3.0f);
+        const float attackCoef = 1.0f - std::exp (-dt / attack), releaseCoef = 1.0f - std::exp (-dt / release);
+        const float foodFloor = std::max (minFood, 0.25f * energyMean);
+
+        for (int c = 0; c < activeCells; ++c)
+        {
+            auto& l = life[(size_t) c];
+            const float e = energy[(size_t) c];
+            const float fed = std::max (e / (e + foodFloor), excitation[(size_t) c]);   // 0 starving .. 1 well fed
+
+            if (l.alive)
+            {
+                const float chanceRate = 1.0f / (l.span * lifespan);
+                const float energyRate = (1.0f - 2.0f * fed) / lifespan;        // fed > 0.5 recovers
+                l.hunger = std::max (0.0f, l.hunger + dt * ((1.0f - feedAmount) * chanceRate + feedAmount * energyRate));
+                l.vitality += (1.0f - l.vitality) * attackCoef;
+                if (l.hunger >= 1.0f)
+                {
+                    l.alive = false;
+                    l.rebirth = 0.0f;
+                }
+            }
+            else
+            {
+                l.vitality -= l.vitality * releaseCoef;
+                if (l.vitality < 0.02f && ! l.moved)
+                {
+                    rollLife (l);   // silent now: move it to where it will be reborn
+                    l.moved = true;
+                }
+                const float chancePush = 1.0f / (l.rest * lifespan);
+                const float energyPush = fed > 0.5f ? 1.0f / minRebirthSec : 0.0f;
+                if (l.moved)
+                    l.rebirth += dt * ((1.0f - feedAmount) * chancePush + feedAmount * energyPush);
+                if (l.rebirth >= 1.0f)
+                {
+                    l.alive = true;
+                    l.moved = false;
+                    l.hunger = 0.0f;
+                    ++births;
+                }
+            }
+        }
+    }
+
     void controlTick (int sampleOffset) noexcept
     {
         smoothTowardsTarget();
@@ -493,16 +598,19 @@ private:
         const FieldSettings e = effectiveSettings();
 
         // Life (phase 2): the chaos moves the throat. Flux × Wander sets how far; 0 = still.
-        const auto& life = chaos.advance (e.driftHz, tickDt);
+        const auto& chaosOut = chaos.advance (e.driftHz, tickDt);
         const float roam = std::clamp (e.fluxAmount * e.wander, 0.0f, 1.0f);
 
         // Life (phase 3): energy coupling. Flux × Coupling sets how strongly.
         updateCoupling (std::clamp (e.fluxAmount * e.coupling, 0.0f, 1.0f));
-        const float vowelNow = cur.vowel + roam * maxVowelWander * life.vowel;
-        const float sizeNow = e.sizeOct + roam * maxSizeWanderOct * life.size;
-        openness = roam * life.openness;
+
+        // Life (phase 4): cells are born, live, die and are reborn. Flux sets how deep it cuts.
+        updateLife (std::clamp (e.fluxAmount, 0.0f, 1.0f), std::clamp (e.feed, 0.0f, 1.0f), std::max (0.01f, e.lifespanSec));
+        const float vowelNow = cur.vowel + roam * maxVowelWander * chaosOut.vowel;
+        const float sizeNow = e.sizeOct + roam * maxSizeWanderOct * chaosOut.size;
+        openness = roam * chaosOut.openness;
         for (size_t k = 0; k < formantDrift.size(); ++k)
-            formantDrift[k] = roam * maxFormantWanderOct * life.formant[k];
+            formantDrift[k] = roam * maxFormantWanderOct * chaosOut.formant[k];
         effMix = e.mix;
 
         // Broken: coefficients only update every 8th tick, so movement steps instead of gliding.
@@ -551,7 +659,7 @@ private:
             pan[0][(size_t) c] = std::min (1.0f, 1.0f + p);
             pan[1][(size_t) c] = std::min (1.0f, 1.0f - p);
             for (int ch = 0; ch < maxChannels; ++ch)
-                levelMod[(size_t) ch][(size_t) c] = 1.0f;
+                levelMod[(size_t) ch][(size_t) c] = 1.0f - lifeDepth * (1.0f - life[(size_t) c].vitality);
 
             if (! updateCoefficients)
                 continue;
@@ -591,12 +699,19 @@ private:
         // Recomputed every 4th tick; drops at once, recovers smoothly.
         if (updateCoefficients && (normCounter++ % 4) == 0)
         {
-            float loudest = 1.0e-6f;
+            // Life: the living cells are normalised (the population's level stays even as cells die),
+            // but by at most +12 dB over the full field, so a dying population still fades out.
+            float loudest = 1.0e-6f, loudestFull = 1.0e-6f;
             auto probe = [&] (float hz) {
-                float sum = 0.0f;
+                float sum = 0.0f, full = 0.0f;
                 for (int c = 0; c < activeCells; ++c)
-                    sum += cellGain[(size_t) c] * FluxCell::magnitude (hz / cellFreqNow[0][(size_t) c], cellQ[0][(size_t) c], 1.0f);
+                {
+                    const float m = cellGain[(size_t) c] * FluxCell::magnitude (hz / cellFreqNow[0][(size_t) c], cellQ[0][(size_t) c], 1.0f);
+                    sum += m * levelMod[0][(size_t) c];
+                    full += m;
+                }
                 loudest = std::max (loudest, sum);
+                loudestFull = std::max (loudestFull, full);
             };
             float lowest = maxHz, highest = 0.0f;
             for (int c = 0; c < activeCells; ++c)
@@ -608,7 +723,7 @@ private:
             }
             probe (lowest * 0.5f);
             probe (std::min (highest * 2.0f, maxHz));
-            const float unityNorm = 1.0f / loudest;
+            const float unityNorm = std::min (1.0f / loudest, maxPopulationLift / loudestFull);
             fieldNorm = unityNorm < fieldNorm ? unityNorm : fieldNorm + (unityNorm - fieldNorm) * 0.2f;
         }
 
@@ -631,7 +746,7 @@ private:
                     // Two bandpass stages at the same Q: (j k x / (1 - x² + j k x))²
                     const float x = hz / cellFreqNow[0][(size_t) c], k = 1.0f / cellQ[0][(size_t) c];
                     const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
-                    sum += cellGain[(size_t) c] * stage * stage;
+                    sum += cellGain[(size_t) c] * levelMod[0][(size_t) c] * stage * stage;   // living cells only
                 }
                 pinkEnergy += std::norm (sum);
             }
@@ -696,6 +811,15 @@ private:
     FluxChaos chaos;
     float openness = 0.0f;
     std::array<float, formants::numFormants> formantDrift {};
+
+    // Life: cycle
+    static constexpr float maxPopulationLift = 4.0f;   // +12 dB: how far the norm lifts a thinned-out population
+    static constexpr float minFood = 1.0e-7f;          // energy below this (about -70 dB) is no food
+    static constexpr float minRebirthSec = 0.05f;      // energy-driven rebirth takes at least this long
+    std::array<CellLife, maxCells> life {};
+    FastRandom lifeRng;
+    float lifeDepth = 0.0f, energyMean = 0.0f;
+    uint32_t births = 0;
 
     // Life: energy coupling
     static constexpr float maxBleed = 0.25f;

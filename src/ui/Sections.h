@@ -39,11 +39,11 @@ public:
             addAndMakeVisible (c);
             return c;
         };
-        // Left: Turbulence, Stereo / Coupling, Wavelength. Right: Drift, Wander with Shape and Direction under them.
-        knob (spec::FP::Turbulence, "Turbulence");
+        // Left: Lifespan, Stereo / Coupling, Feed. Right: Drift, Wander with Shape and Direction under them.
+        knob (spec::FP::Lifespan, "Lifespan");
         knob (spec::FP::FluxStereo, "Stereo");
         knob (spec::FP::Coupling, "Coupling");
-        knob (spec::FP::Wavelength, "Wavelength");
+        knob (spec::FP::Feed, "Feed");
         knob (spec::FP::Drift, "Drift");
         knob (spec::FP::Wander, "Wander");
         amount.getSlider().setTooltip ("Flux: how strongly the wave moves through the field");

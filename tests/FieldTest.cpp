@@ -238,6 +238,7 @@ int main()
         struct Trace { std::vector<float> f1, f3; };
         auto trace = [&] (FieldSettings s, float seconds) {
             s.width = 0.0f; s.density = 9;
+            s.lifespanSec = 1.0e4f; s.feed = 0.0f;   // drift only: no cell dies in these traces
             FluxField f; f.setSettings (s); f.prepare (sr);
             Trace t; std::vector<float> buf (FluxField::controlInterval);
             for (int k = 0; k < (int) (seconds * sr) / FluxField::controlInterval; ++k)
@@ -339,6 +340,94 @@ int main()
         const double l0 = level (0.0f), l1 = level (1.0f);
         std::printf ("coupling: noise level %+.1f dB without, %+.1f dB at full coupling\n", l0, l1);
         CHECK (std::abs (l1 - l0) < 1.5, "coupling changes the level by %.1f dB", l1 - l0);
+    }
+
+    // 6c. Life cycle. Chance: cells die and are reborn, more often with a shorter Lifespan, while the
+    //     level stays even. Energy: cells fed by the input live, starved ones die, silence kills
+    //     all; food brings them back. Flux 0: every cell lives forever.
+    {
+        auto pinkNoise = [] (size_t n) {
+            std::mt19937 r (3); std::normal_distribution<float> d (0.0f, 0.2f);
+            float b0 = 0, b1 = 0, b2 = 0; std::vector<float> v (n);
+            for (auto& x : v)
+            {
+                const float w = d (r);
+                b0 = 0.99765f * b0 + w * 0.0990460f; b1 = 0.96300f * b1 + w * 0.2965164f; b2 = 0.57000f * b2 + w * 1.0526913f;
+                x = (b0 + b1 + b2 + w * 0.1848f) * 0.25f;
+            }
+            return v;
+        };
+        struct Run { uint32_t births; float meanVitality; double minDb, maxDb, levelDb; };
+        auto chance = [&] (float flux, float lifespan) {
+            FieldSettings s; s.density = 12; s.fluxAmount = flux; s.wander = 0.0f; s.coupling = 0.0f; s.feed = 0.0f;
+            s.lifespanSec = lifespan; s.resonance = 0.3f; s.width = 0.0f; s.autoGain = false; s.limiter = false;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            auto v = pinkNoise (48000 * 10); const double in = rmsTail (v);
+            double vit = 0.0; int n = 0;
+            for (size_t i = 0; i < v.size(); i += 480)
+            {
+                f.process (v.data() + i, nullptr, 480);
+                for (int c = 0; c < 12; ++c) vit += f.getCellVitality (c);
+                n += 12;
+            }
+            Run r { f.getBirths(), (float) (vit / n), 1e9, -1e9, 20.0 * std::log10 (rmsTail (v) / in) };
+            for (int sec = 2; sec < 10; ++sec)
+            {
+                double a = 0.0; for (int i = sec * 48000; i < (sec + 1) * 48000; ++i) a += (double) v[(size_t) i] * v[(size_t) i];
+                const double db = 10.0 * std::log10 (a / 48000.0);
+                r.minDb = std::min (r.minDb, db); r.maxDb = std::max (r.maxDb, db);
+            }
+            return r;
+        };
+        const auto still = chance (0.0f, 0.2f), fast = chance (1.0f, 0.2f), slow = chance (1.0f, 2.0f);
+        std::printf ("life chance: lifespan 0.2 s %u births in 10 s, 2 s %u births; mean vitality %.2f; level %+.1f dB (flux 0: %+.1f), "
+                     "per-second swing %.1f / %.1f dB\n", fast.births, slow.births, fast.meanVitality, fast.levelDb, still.levelDb,
+                     fast.maxDb - fast.minDb, slow.maxDb - slow.minDb);
+        CHECK (fast.births > 100 && slow.births > 5 && fast.births > slow.births * 5, "births %u / %u", fast.births, slow.births);
+        CHECK (fast.meanVitality > 0.25f && fast.meanVitality < 0.8f, "chance population %.2f", fast.meanVitality);
+        CHECK (std::abs (fast.levelDb - still.levelDb) < 3.0, "life changes the level by %.1f dB", fast.levelDb - still.levelDb);
+        CHECK (fast.maxDb - fast.minDb < 3.0 && slow.maxDb - slow.minDb < 3.0, "level swings %.1f / %.1f dB", fast.maxDb - fast.minDb, slow.maxDb - slow.minDb);
+        // Vitality runs at Flux 0 too, but has no effect: cells never move or fade.
+        {
+            FieldSettings a; a.fluxAmount = 0.0f; a.feed = 0.0f; a.lifespanSec = 0.1f; a.width = 0.0f; a.density = 9;
+            auto f = settle (a);   // settle forces Flux 0
+            FluxField g; g.setSettings (a); g.prepare (sr);
+            std::vector<float> buf (480, 0.0f);
+            float worst = 0.0f;
+            for (int b = 0; b < 300; ++b)
+            {
+                std::fill (buf.begin(), buf.end(), 0.0f); g.process (buf.data(), nullptr, 480);
+                for (int c = 0; c < 9; ++c) worst = std::max (worst, std::abs (std::log2 (g.getCellFrequencyNow (c) / f->getCellFrequency (c))));
+            }
+            CHECK (worst < 1e-5f, "flux 0: reborn cells must not move (%.5f oct)", worst);
+        }
+
+        FieldSettings e; e.density = 9; e.fluxAmount = 1.0f; e.wander = 0.0f; e.coupling = 0.3f; e.feed = 1.0f; e.lifespanSec = 0.5f; e.width = 0.0f;
+        const float hz = settle (e)->getCellFrequency (1);   // middle of F1
+        FluxField f; f.setSettings (e); f.prepare (sr);
+        std::vector<float> buf (480);
+        auto play = [&] (float seconds, bool tone, int& tick) {
+            for (int b = 0; b < (int) (seconds * 100.0f); ++b, ++tick)
+            {
+                for (size_t i = 0; i < buf.size(); ++i)
+                    buf[i] = tone ? 0.2f * (float) std::sin (2.0 * M_PI * hz * (double) (tick * 480 + (int) i) / sr) : 0.0f;
+                f.process (buf.data(), nullptr, (int) buf.size());
+            }
+        };
+        int tick = 0;
+        play (3.0f, true, tick);
+        std::printf ("life energy: tone on F1 for 3 s, vitality:");
+        for (int c = 0; c < 9; ++c) std::printf (" %.2f", f.getCellVitality (c));
+        std::printf ("\n");
+        for (int c = 0; c < 3; ++c) CHECK (f.getCellVitality (c) > 0.9f, "fed F1 cell %d died (%.2f)", c, f.getCellVitality (c));
+        for (int c = 6; c < 9; ++c) CHECK (f.getCellVitality (c) < 0.1f, "starved F3 cell %d lives (%.2f)", c, f.getCellVitality (c));
+        play (3.0f, false, tick);
+        float most = 0.0f; for (int c = 0; c < 9; ++c) most = std::max (most, f.getCellVitality (c));
+        CHECK (most < 0.1f, "silence should starve the population (%.2f)", most);
+        const auto before = f.getBirths();
+        play (1.0f, true, tick);
+        CHECK (f.getBirths() > before, "food should bring cells back");
+        std::printf ("life energy: after 3 s silence the most vital cell %.2f; tone again: %u births\n", most, f.getBirths() - before);
     }
 
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,

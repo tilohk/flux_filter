@@ -162,6 +162,17 @@ src/presets/PresetManager.h // new factory set
    - The Viscosity of an LFO's Flux share is fixed at 0.2 until phase 7.
    - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.3 % of one core (from 2.0 %).
 4. **Life cycle:** vitality, birth/death, Feed and Lifespan, normalisation over living cells.
+   **Built (2026-11-21):**
+   - **Feed** (0–1, replaces Wavelength, ID `feed`, default 50 %) and **Lifespan** (0.05–20 s, replaces Turbulence, ID `lifespan`, default 2 s), both mod targets.
+   - Each cell is alive (vitality rises, attack 0.15× Lifespan) or dead (vitality falls, release 0.3× Lifespan); a *hunger* value decides when it dies. Feed blends the two rates:
+     - *Chance:* hunger grows by itself; the cell dies after its own lifespan (0.5–1.5× Lifespan) and is reborn after a rest of 0.15–0.55× Lifespan.
+     - *Energy:* a cell eats the input energy in its band. Fed cells (own energy well above −70 dB and a quarter of the field's average, or excited by their neighbours) lose hunger; starved ones die after about Lifespan. A dead cell keeps listening at its next place and is reborn as soon as there is food there (≥ 50 ms). Silence starves the population.
+   - Rebirth: once silent, a dead cell moves. Inside its formant it moves by up to the formant's whole span; when scattered it can land anywhere. The move is scaled by Flux.
+   - Depth: a cell's gain is 1 − Flux × (1 − vitality). At Flux 0 every cell lives forever and nothing moves.
+   - Level: the field normalises over the living cells, lifting a thinned population by at most +12 dB over the full field, so a dying population still fades out. The makeup estimate counts only living cells. Measured on pink noise in chance mode: level equal to Flux 0, per-second swing under 1.5 dB (it was 13 dB before living-cell normalisation).
+   - Measured: Lifespan 0.2 s gives ~240 births in 10 s (12 cells), 2 s gives ~22. A tone on F1 in energy mode keeps the F1 cells alive while F2/F3 die; 3 s of silence kills all; the tone brings them back.
+   - Deterministic: the life random generator is reseeded on every prepare.
+   - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.3 % of one core.
 5. **Rasp:** jitter and subharmonic growl.
 6. **Pitch anchor and Stereo life.**
 7. **Parameters, LFO flux redefinition, UI:** Flux section, Cells labels, field display.

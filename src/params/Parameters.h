@@ -143,8 +143,8 @@ namespace flux::params
             floatParam (FP::Wander),
             choice (id::direction, "Direction", { "Up", "Down", "Outward", "Inward" }, 0),
             floatParam (FP::Coupling),
-            floatParam (FP::Wavelength),
-            floatParam (FP::Turbulence),
+            floatParam (FP::Feed),
+            floatParam (FP::Lifespan),
             floatParam (FP::FluxStereo));
 
         auto output = std::make_unique<AudioProcessorParameterGroup> ("output", "Output", "|",

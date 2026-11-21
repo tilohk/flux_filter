@@ -21,7 +21,7 @@ enum class ModTarget : int
     None = 0,
     Vowel, Resonance, Scatter,                                 // per cell
     Size, Width, Feedback, Damping,
-    Drift, FluxAmount, Wander, Coupling, Wavelength, Turbulence, FluxStereo,
+    Drift, FluxAmount, Wander, Coupling, Feed, Lifespan, FluxStereo,
     Drive, Mix, Output,
     Lfo1Rate, Lfo2Rate, Lfo3Rate,
     Count
@@ -29,7 +29,7 @@ enum class ModTarget : int
 inline constexpr const char* modTargetNames[] = {
     "None", "Vowel (cells)", "Resonance (cells)", "Scatter (cells)",
     "Size", "Width", "Feedback", "Damping",
-    "Drift", "Flux", "Wander", "Coupling", "Wavelength", "Turbulence", "Flux Stereo",
+    "Drift", "Flux", "Wander", "Coupling", "Feed", "Lifespan", "Flux Stereo",
     "Drive", "Mix", "Output",
     "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate"
 };
@@ -55,8 +55,8 @@ inline spec::FP targetParam (ModTarget t) noexcept
         case ModTarget::FluxAmount: return FP::FluxAmount;
         case ModTarget::Wander:     return FP::Wander;
         case ModTarget::Coupling:   return FP::Coupling;
-        case ModTarget::Wavelength: return FP::Wavelength;
-        case ModTarget::Turbulence: return FP::Turbulence;
+        case ModTarget::Feed:       return FP::Feed;
+        case ModTarget::Lifespan:   return FP::Lifespan;
         case ModTarget::FluxStereo: return FP::FluxStereo;
         case ModTarget::Drive:      return FP::Drive;
         case ModTarget::Mix:        return FP::Mix;

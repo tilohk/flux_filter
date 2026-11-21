@@ -77,8 +77,8 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     s.wander     = value (FP::Wander);
     s.propagation.direction  = (FluxDirection) (int) pDirection->load();
     s.coupling   = value (FP::Coupling);
-    s.propagation.wavelength = value (FP::Wavelength);
-    s.propagation.turbulence = value (FP::Turbulence);
+    s.feed        = value (FP::Feed);
+    s.lifespanSec = value (FP::Lifespan);
     s.propagation.stereo     = value (FP::FluxStereo);
     s.driveDb   = value (FP::Drive);
     s.mix       = value (FP::Mix);
