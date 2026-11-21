@@ -18,8 +18,10 @@ namespace flux::params
         inline constexpr auto character = "character";
         inline constexpr auto autoGain  = "autoGain";
         inline constexpr auto limiter   = "limiter";
-        inline constexpr auto fluxShape = "fluxShape";
-        inline constexpr auto direction = "direction";
+        inline constexpr auto anchor     = "anchor";
+        inline constexpr auto anchorKey  = "anchorKey";
+        inline constexpr auto anchorScale = "anchorScale";
+        inline constexpr auto stereoLife = "stereoLife";
 
         inline juce::String lfo (int i, const char* what)  { return "lfo" + juce::String (i + 1) + what; }   // Sync, Division, Shape, Unipolar, Flux
         inline juce::String slot (int i, const char* what) { return "slot" + juce::String (i + 1) + what; }  // Source, Target, Depth
@@ -138,10 +140,12 @@ namespace flux::params
 
         auto fluxGroup = std::make_unique<AudioProcessorParameterGroup> ("flux", "Flux", "|",
             floatParam (FP::Drift),
-            choice (id::fluxShape, "Flux Shape", { "Sine", "Triangle", "Ramp", "Random" }, 0),
+            choice (id::anchor, "Pitch Anchor", { "Off", "Scale", "Follow" }, 0),
+            choice (id::anchorKey, "Key", names (anchor::keyNames), 0),
+            choice (id::anchorScale, "Scale", names (anchor::scaleNames), 1),
             floatParam (FP::FluxAmount),
             floatParam (FP::Wander),
-            choice (id::direction, "Direction", { "Up", "Down", "Outward", "Inward" }, 0),
+            choice (id::stereoLife, "Stereo Life", { "Linked", "Independent" }, 0),
             floatParam (FP::Coupling),
             floatParam (FP::Feed),
             floatParam (FP::Lifespan),

@@ -5,33 +5,24 @@
 namespace flux::ui
 {
 
-// The heart of the plugin: one big Flux knob (how strongly the wave moves the field) surrounded
-// by the controls that shape how the wave travels. The big knob sits at the horizontal centre of
-// the window, whatever the section's own position and width.
+// The heart of the plugin: one big Flux knob (how alive the field is) surrounded by the controls
+// that shape how it lives. The big knob sits at the horizontal centre of the window, whatever the
+// section's own position and width.
 class FluxSection : public juce::Component
 {
 public:
     explicit FluxSection (ModContext& ctx)
         : amount (ctx, spec::get (spec::FP::FluxAmount).id, "Flux", KnobSize::Hero),
-          shape (ctx, params::id::fluxShape, "Shape", [] (int i, juce::Rectangle<float> a) {
+          anchorRow (ctx, params::id::anchor, "Pitch", [] (int i, juce::Rectangle<float> a) {
               switch (i)
               {
-                  case 1:  return icons::triangle (a);
-                  case 2:  return icons::rampUp (a);
-                  case 3:  return icons::random (a);
-                  default: return icons::sine (a);
+                  case 1:  return icons::anchorScale (a);
+                  case 2:  return icons::anchorFollow (a);
+                  default: return icons::anchorOff (a);
               }
           }, colours::flux),
-          direction (ctx, params::id::direction, "Direction", [] (int i, juce::Rectangle<float> a) {
-              juce::Path p;   // the field runs low -> high from left to right
-              switch (i)
-              {
-                  case 1:  icons::arrow (p, a, 1.0f, -1.0f); break;                                   // Down
-                  case 2:  icons::arrow (p, a, -0.15f, -1.0f); icons::arrow (p, a, 0.15f, 1.0f); break;  // Outward
-                  case 3:  icons::arrow (p, a, -1.0f, -0.15f); icons::arrow (p, a, 1.0f, 0.15f); break;  // Inward
-                  default: icons::arrow (p, a, -1.0f, 1.0f); break;                                   // Up
-              }
-              return p;
+          stereoRow (ctx, params::id::stereoLife, "Stereo", [] (int i, juce::Rectangle<float> a) {
+              return icons::twoCircles (a, i == 1 ? 1.5f : 0.5f);
           }, colours::flux)
     {
         auto knob = [&] (spec::FP p, const char* label) -> ParamControl& {
@@ -39,22 +30,37 @@ public:
             addAndMakeVisible (c);
             return c;
         };
-        // Left: Lifespan, Rasp / Coupling, Feed. Right: Drift, Wander with Shape and Direction under them.
+        // Left: Lifespan, Rasp / Coupling, Feed. Right: Drift, Wander, then Pitch (+ key) and Scale / Stereo.
         knob (spec::FP::Lifespan, "Lifespan");
         knob (spec::FP::Rasp, "Rasp");
         knob (spec::FP::Coupling, "Coupling");
         knob (spec::FP::Feed, "Feed");
         knob (spec::FP::Drift, "Drift");
         knob (spec::FP::Wander, "Wander");
-        amount.getSlider().setTooltip ("Flux: how strongly the wave moves through the field");
+        amount.getSlider().setTooltip ("Flux: how alive the field is. 0 = a still formant filter; up: more drift, coupling, life and rasp");
         addAndMakeVisible (amount);
-        addAndMakeVisible (shape);
-        addAndMakeVisible (direction);
+        addAndMakeVisible (anchorRow);
+        addAndMakeVisible (stereoRow);
+
+        auto combo = [&] (juce::ComboBox& box, const char* paramId, const char* const* items, int n, const char* tip,
+                          std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>& att) {
+            for (int i = 0; i < n; ++i) box.addItem (items[i], i + 1);
+            box.setTooltip (tip);
+            box.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (box);
+            att = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (ctx.state, paramId, box);
+        };
+        combo (keyBox, params::id::anchorKey, anchor::keyNames, 12, "Key of the pitch anchor (Scale mode)", keyAtt);
+        combo (scaleBox, params::id::anchorScale, anchor::scaleNames, 5,
+               "Scale of the pitch anchor (Scale mode); Harmonic = the harmonic series of the key", scaleAtt);
     }
 
     void paint (juce::Graphics& g) override
     {
         paintPanel (g, getLocalBounds(), "Flux", colours::flux);
+        g.setColour (colours::dim);
+        g.setFont (juce::FontOptions (12.0f));
+        g.drawText ("Scale", scaleLabel, juce::Justification::centredLeft);
     }
 
     void resized() override
@@ -66,9 +72,10 @@ public:
 
         // Buttons as wide as the LFO shape buttons (four equal modules in the bottom row, five buttons each).
         const int moduleW = (parentW - 2 * 12 - 3 * 10) / 4;
-        const int bw = (moduleW - 20 - 4 * ChoiceButtonRow::gapW) / 5;
-        shape.setButtonWidth (bw);
-        direction.setButtonWidth (bw);
+        const int gap = ChoiceButtonRow::gapW, bw = (moduleW - 20 - 4 * gap) / 5;
+        anchorRow.setButtonWidth (bw);
+        stereoRow.setButtonWidth (bw);
+        const int rowW = 4 * bw + 3 * gap;
 
         // The big knob at the window's horizontal centre.
         const int hero = juce::jmin (210, r.getHeight());
@@ -88,20 +95,34 @@ public:
         for (int i = 0; i < 4; ++i)
             place (*knobs[(size_t) i], { left.getX() + (i % 2) * leftW / 2, left.getY() + (i / 2) * knobH, leftW / 2, knobH });
 
-        // Right: Rate, Travel, then the Shape and Direction buttons.
+        // Right: Drift, Wander; Pitch buttons + key; Scale + Stereo buttons.
+        const int rowH = anchorRow.preferredHeight(), labelH = ChoiceButtonRow::labelH;
         auto right = r.withLeft (heroArea.getRight() + 8);
-        right = right.withSizeKeepingCentre (right.getWidth(), knobH + 10 + shape.preferredHeight() + 8 + direction.preferredHeight());
-        auto row = right.removeFromTop (knobH).withSizeKeepingCentre (shape.rowWidth(), knobH);
-        for (int i = 4; i < 6; ++i) place (*knobs[(size_t) i], row.removeFromLeft (shape.rowWidth() / 2));
+        right = right.withSizeKeepingCentre (rowW, knobH + 10 + rowH + 8 + rowH);
+        auto knobRow = right.removeFromTop (knobH);
+        for (int i = 4; i < 6; ++i) place (*knobs[(size_t) i], knobRow.removeFromLeft (rowW / 2));
         right.removeFromTop (10);
-        shape.setBounds (right.removeFromTop (shape.preferredHeight()));
+
+        auto rowA = right.removeFromTop (rowH);
+        anchorRow.setBounds (rowA.removeFromLeft (3 * bw + 2 * gap));
+        rowA.removeFromLeft (gap);
+        keyBox.setBounds (rowA.withTrimmedTop (labelH));
         right.removeFromTop (8);
-        direction.setBounds (right);
+
+        auto rowB = right.removeFromTop (rowH);
+        auto scaleArea = rowB.removeFromLeft (2 * bw + gap);
+        scaleLabel = scaleArea.removeFromTop (labelH);
+        scaleBox.setBounds (scaleArea);
+        rowB.removeFromLeft (gap);
+        stereoRow.setBounds (rowB);
     }
 
 private:
     ParamControl amount;
-    ChoiceButtonRow shape, direction;
+    ChoiceButtonRow anchorRow, stereoRow;
+    juce::ComboBox keyBox, scaleBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, scaleAtt;
+    juce::Rectangle<int> scaleLabel;
     std::vector<std::unique_ptr<ParamControl>> knobs;
 };
 

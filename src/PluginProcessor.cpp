@@ -24,8 +24,10 @@ FluxFilterAudioProcessor::FluxFilterAudioProcessor()
     pCharacter = get (params::id::character);
     pAutoGain  = get (params::id::autoGain);
     pLimiter   = get (params::id::limiter);
-    pFluxShape = get (params::id::fluxShape);
-    pDirection = get (params::id::direction);
+    pAnchor      = get (params::id::anchor);
+    pAnchorKey   = get (params::id::anchorKey);
+    pAnchorScale = get (params::id::anchorScale);
+    pStereoLife  = get (params::id::stereoLife);
 
     for (int i = 0; i < ModSettings::numLfos; ++i)
         lfoParams[(size_t) i] = { get (params::id::lfo (i, "Sync")), get (params::id::lfo (i, "Division")),
@@ -75,7 +77,10 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     s.fluxAmount = value (FP::FluxAmount);
     s.driftHz    = value (FP::Drift);
     s.wander     = value (FP::Wander);
-    s.propagation.direction  = (FluxDirection) (int) pDirection->load();
+    s.anchor      = (AnchorMode) (int) pAnchor->load();
+    s.anchorKey   = (int) pAnchorKey->load();
+    s.anchorScale = (AnchorScale) (int) pAnchorScale->load();
+    s.stereoIndependent = pStereoLife->load() > 0.5f;
     s.coupling   = value (FP::Coupling);
     s.feed        = value (FP::Feed);
     s.lifespanSec = value (FP::Lifespan);

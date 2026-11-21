@@ -77,8 +77,10 @@ private:
     std::atomic<float>* pCharacter = nullptr;
     std::atomic<float>* pAutoGain = nullptr;
     std::atomic<float>* pLimiter = nullptr;
-    std::atomic<float>* pFluxShape = nullptr;
-    std::atomic<float>* pDirection = nullptr;
+    std::atomic<float>* pAnchor = nullptr;
+    std::atomic<float>* pAnchorKey = nullptr;
+    std::atomic<float>* pAnchorScale = nullptr;
+    std::atomic<float>* pStereoLife = nullptr;
 
     struct LfoParams { std::atomic<float>* sync; std::atomic<float>* division; std::atomic<float>* shape;
                        std::atomic<float>* unipolar; std::atomic<float>* flux; };

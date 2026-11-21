@@ -479,6 +479,102 @@ int main()
         CHECK (std::abs (l1 - l0) < 2.0, "rasp changes the level by %.1f dB", l1 - l0);
     }
 
+    // 6e. Pitch anchor: notes of a scale, harmonics of the key, harmonics of the input's pitch.
+    {
+        auto cents = [] (float a, float b) { return 1200.0f * std::abs (std::log2 (a / b)); };
+        using namespace anchor;
+        CHECK (cents (std::exp2 (snapToScale (std::log2 (450.0f), 9, AnchorScale::Pentatonic)), 440.0f) < 0.01f, "A pentatonic: 450 Hz → A4");
+        CHECK (cents (std::exp2 (snapToScale (std::log2 (470.0f), 0, AnchorScale::Major)), 493.88f) < 0.1f, "C major: 470 Hz → B4");
+        CHECK (cents (std::exp2 (snapToScale (std::log2 (170.0f), 9, AnchorScale::Harmonic)), 165.0f) < 0.1f, "harmonics of A1: 170 Hz → 165 Hz");
+        CHECK (cents (std::exp2 (snapToHarmonic (std::log2 (330.0f), std::log2 (110.0f))), 330.0f) < 0.01f, "harmonic of 110 Hz");
+
+        // The detector: sine and saw, 55..880 Hz, within 3 cents.
+        float worstDetect = 0.0f;
+        for (float hz : { 55.0f, 110.0f, 220.0f, 440.0f, 880.0f })
+            for (int wave = 0; wave < 2; ++wave)
+            {
+                PitchDetector d; d.prepare ((float) sr); float est = 0.0f;
+                for (int i = 0; i < 24000; ++i)
+                {
+                    const double ph = std::fmod (hz * i / sr, 1.0);
+                    d.push (wave ? (float) (2.0 * ph - 1.0) * 0.3f : 0.3f * (float) std::sin (2.0 * M_PI * ph));
+                    if (i % 960 == 0) est = d.analyse();
+                }
+                worstDetect = std::max (worstDetect, cents (est, hz));
+            }
+        std::printf ("anchor: pitch detector within %.1f cents (55-880 Hz, sine and saw)\n", worstDetect);
+        CHECK (worstDetect < 3.0f, "pitch detector off by %.1f cents", worstDetect);
+
+        auto onNotes = [&] (FieldSettings s, float seconds, const std::vector<float>* input, auto&& noteOf) {
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            std::vector<float> l (480), r (480);
+            long on = 0, all = 0; size_t pos = 0;
+            for (int b = 0; b < (int) (seconds * 100.0f); ++b)
+            {
+                for (size_t i = 0; i < 480; ++i, ++pos) l[i] = r[i] = input != nullptr ? (*input)[pos % input->size()] : 0.0f;
+                f.process (l.data(), r.data(), 480);
+                if (b < 20) continue;   // let it settle
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int c = 0; c < s.density; ++c)
+                    {
+                        const float hz = f.getCellFrequencyNow (c, ch);
+                        on += cents (hz, noteOf (hz, f)) < 5.0f; ++all;
+                    }
+            }
+            return std::pair { 100.0 * (double) on / (double) all, f.getPitchHz() };
+        };
+        FieldSettings sc; sc.density = 12; sc.anchor = AnchorMode::Scale; sc.anchorKey = 9; sc.anchorScale = AnchorScale::Pentatonic;
+        sc.feed = 0.0f; sc.lifespanSec = 1.0e4f;
+        auto scaleNote = [] (float hz, const FluxField&) { return std::exp2 (snapToScale (std::log2 (hz), 9, AnchorScale::Pentatonic)); };
+        FieldSettings still = sc; still.fluxAmount = 0.0f;
+        const double stillOn = onNotes (still, 1.0f, nullptr, scaleNote).first;
+        FieldSettings moving = sc; moving.fluxAmount = 1.0f; moving.wander = 0.5f; moving.driftHz = 0.2f;
+        const double movingOn = onNotes (moving, 5.0f, nullptr, scaleNote).first;
+        std::printf ("anchor: A minor pentatonic, cells on a note (±5 cents): still %.0f %%, drifting %.0f %% of the time\n", stillOn, movingOn);
+        CHECK (stillOn > 99.9, "still cells off the scale (%.1f %% on notes)", stillOn);
+        CHECK (movingOn > 90.0, "drifting cells mostly off the scale (%.1f %% on notes)", movingOn);
+
+        std::vector<float> saw (48000);
+        for (size_t i = 0; i < saw.size(); ++i) saw[i] = 0.3f * (float) (2.0 * std::fmod (110.0 * (double) i / sr, 1.0) - 1.0);
+        FieldSettings fol = still; fol.anchor = AnchorMode::Follow;
+        auto harmonicOf110 = [] (float hz, const FluxField&) { return std::exp2 (snapToHarmonic (std::log2 (hz), std::log2 (110.0f))); };
+        const auto [folOn, detected] = onNotes (fol, 2.0f, &saw, harmonicOf110);
+        std::printf ("anchor: follow a 110 Hz saw: detected %.2f Hz, cells on its harmonics %.0f %% of the time\n", detected, folOn);
+        CHECK (cents (detected, 110.0f) < 3.0f, "follow detected %.2f Hz", detected);
+        CHECK (folOn > 95.0, "follow: cells off the harmonics (%.1f %%)", folOn);
+    }
+
+    // 6f. Stereo life: linked channels share drift, life and rasp; independent ones don't.
+    {
+        auto run2 = [&] (bool independent) {
+            FieldSettings s; s.density = 9; s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 1.0f; s.rasp = 1.0f;
+            s.feed = 0.0f; s.lifespanSec = 0.3f; s.width = 0.0f; s.stereoIndependent = independent;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            auto l = noise (480, 0.1f, 1), r = l;
+            float freqDiff = 0.0f, vitDiff = 0.0f;
+            for (int b = 0; b < 300; ++b)
+            {
+                auto bl = l, br = r; f.process (bl.data(), br.data(), 480);
+                for (int c = 0; c < 9; ++c)
+                {
+                    freqDiff = std::max (freqDiff, std::abs (std::log2 (f.getCellFrequencyNow (c, 0) / f.getCellFrequencyNow (c, 1))));
+                    vitDiff = std::max (vitDiff, std::abs (f.getCellVitality (c, 0) - (independent ? f.getCellVitality (c, 1) : f.getCellVitality (c, 0))));
+                }
+            }
+            return std::pair { freqDiff, vitDiff };
+        };
+        const auto linked = run2 (false), split = run2 (true);
+        std::printf ("stereo life: L/R cell difference linked %.4f oct, independent %.2f oct; vitality difference independent %.2f\n",
+                     linked.first, split.first, split.second);
+        CHECK (linked.first < 1e-5f, "linked channels should move together (%.4f oct apart)", linked.first);
+        CHECK (split.first > 0.1f && split.second > 0.5f, "independent channels should live apart (%.3f oct, vitality %.2f)", split.first, split.second);
+
+        FieldSettings mono; mono.stereoIndependent = true; mono.fluxAmount = 1.0f;
+        FluxField m; m.setSettings (mono); m.prepare (sr);
+        auto v = noise (48000, 0.3f); const auto res = run (m, v, nullptr);
+        CHECK (res.finite, "independent stereo life in mono");
+    }
+
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,
     //    and auto gain does not pump the tail up.
     {

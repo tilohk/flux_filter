@@ -34,8 +34,9 @@ public:
             return a;
         };
         constexpr float clean = 0, warm = 1, broken = 2;                 // Character
-        constexpr float sine = 0, triangle = 1, ramp = 2, random = 3;    // flux wave shape
-        constexpr float up = 0, outward = 2;                             // Direction
+        constexpr float scaleMode = 1, follow = 2;                       // Pitch anchor
+        constexpr float keyA = 9, pentatonic = 3, harmonic = 4;
+        constexpr float independent = 1;                                 // Stereo life
         [[maybe_unused]] constexpr float a = 0, e = 1, i = 2, o = 3, u = 4, nasal = 5, growl = 6, schwa = 7, whisper = 8;   // Vowel ring
         constexpr float div8 = 10;                                       // 1/8 in lfoDivisions
         constexpr float lfoSquare = 3;
@@ -43,32 +44,34 @@ public:
         static const std::vector<Factory> list {
             { "Init", {} },
             { "Breathing Vowels", join ({ { "density", 9 }, { "vowel", e }, { "resonance", 0.75f },
-                                          { "flux", 0.35f }, { "drift", 0.15f }, { "wander", 0.50f }, { "fluxShape", sine },
+                                          { "flux", 0.35f }, { "drift", 0.15f }, { "wander", 0.50f },
                                           { lfo (0, "Rate"), 0.2f }, { lfo (0, "Flux"), 1.0f } },
                                         slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.15f)) },
             { "Slow Tide", { { "density", 12 }, { "vowel", o }, { "size", 0.5f }, { "resonance", 0.55f }, { "scatter", 0.2f },
                              { "flux", 0.6f }, { "drift", 0.07f }, { "wander", 0.95f }, { "coupling", 0.6f },
-                             { "character", warm }, { "feedback", 0.2f } } },
+                             { "character", warm }, { "feedback", 0.2f },
+                             { "anchor", scaleMode }, { "anchorKey", keyA }, { "anchorScale", harmonic } } },
             { "Glass Rain", { { "density", 16 }, { "vowel", whisper }, { "size", -1.0f }, { "resonance", 0.9f }, { "scatter", 0.6f },
-                              { "flux", 0.5f }, { "drift", 2.5f }, { "fluxShape", random }, { "lifespan", 0.3f }, { "feed", 0.2f },
-                              { "wander", 0.30f }, { "width", 0.8f }, { "output", 4 } } },
+                              { "flux", 0.5f }, { "drift", 2.5f }, { "lifespan", 0.3f }, { "feed", 0.2f },
+                              { "wander", 0.30f }, { "width", 0.8f }, { "output", 4 }, { "stereoLife", independent } } },
             { "Deep Body", { { "density", 6 }, { "vowel", growl }, { "size", 1.5f }, { "resonance", 0.85f }, { "rasp", 0.8f },
                              { "drive", 6 }, { "character", warm }, { "feedback", 0.35f }, { "damping", 0.6f }, { "flux", 0.15f } } },
             { "Broken Radio", join ({ { "character", broken }, { "rasp", 0.6f }, { "density", 6 }, { "vowel", nasal }, { "size", -0.5f }, { "resonance", 0.8f },
-                                      { "drive", 12 }, { "flux", 0.4f }, { "fluxShape", ramp }, { "drift", 1.5f },
+                                      { "drive", 12 }, { "flux", 0.4f }, { "drift", 1.5f },
                                       { lfo (1, "Sync"), 1 }, { lfo (1, "Division"), div8 }, { lfo (1, "Shape"), lfoSquare } },
                                     slot (0, ModSource::Lfo2, ModTarget::Resonance, 0.2f)) },
             { "Singing Drone", { { "feedback", 0.92f }, { "damping", 0.4f }, { "resonance", 0.9f }, { "density", 8 }, { "vowel", schwa },
-                                 { "size", 0.8f }, { "flux", 0.2f }, { "drift", 0.05f }, { "mix", 0.8f } } },
-            { "Ripple Sweep", { { "direction", outward }, { "feed", 0.8f }, { "wander", 0.35f }, { "flux", 0.7f }, { "drift", 0.4f },
-                                { "density", 10 }, { "vowel", i }, { "scatter", 0.3f }, { "resonance", 0.7f } } },
+                                 { "size", 0.8f }, { "flux", 0.2f }, { "drift", 0.05f }, { "mix", 0.8f },
+                                 { "anchor", scaleMode }, { "anchorKey", keyA }, { "anchorScale", pentatonic } } },
+            { "Ripple Sweep", { { "feed", 0.8f }, { "wander", 0.35f }, { "flux", 0.7f }, { "drift", 0.4f },
+                                { "density", 10 }, { "vowel", i }, { "scatter", 0.3f }, { "resonance", 0.7f }, { "anchor", follow } } },
             { "Vowel Glide", join ({ { "vowel", u }, { "density", 8 }, { "resonance", 0.5f },
-                                      { "flux", 0.5f }, { "drift", 0.25f }, { "wander", 0.28f }, { "fluxShape", triangle },
+                                      { "flux", 0.5f }, { "drift", 0.25f }, { "wander", 0.28f },
                                       { lfo (0, "Rate"), 0.12f }, { lfo (0, "Flux"), 0.0f } },
                                     slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.25f)) },
             { "Tempo Pulse", join ({ { lfo (0, "Sync"), 1 }, { lfo (0, "Division"), div8 }, { lfo (0, "Shape"), lfoSquare },
                                      { lfo (0, "Flux"), 1.0f }, { "wander", 0.26f }, { "density", 10 }, { "resonance", 0.8f },
-                                     { "flux", 0.2f }, { "direction", up }, { "character", clean } },
+                                     { "flux", 0.2f }, { "character", clean } },
                                    slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.2f)) },
         };
         return list;

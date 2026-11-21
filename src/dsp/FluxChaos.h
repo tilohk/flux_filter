@@ -93,12 +93,14 @@ public:
     };
 
     // Deterministic start: the same settings move the same way every time playback starts.
-    void reset() noexcept
+    // variant: a second, independent chaos (e.g. the right channel) starts elsewhere.
+    void reset (uint32_t variant = 0) noexcept
     {
-        throat.reset (1.0f, 1.0f, 20.0f);
-        size.seed (0x6A09E667u);
+        const float v = (float) variant;
+        throat.reset (1.0f + 3.7f * v, 1.0f - 2.3f * v, 20.0f + 5.0f * v);
+        size.seed (0x6A09E667u + 0x3C6EF372u * variant);
         for (size_t k = 0; k < formantNoise.size(); ++k)
-            formantNoise[k].seed (0xBB67AE85u + 0x9E3779B9u * (uint32_t) k);
+            formantNoise[k].seed (0xBB67AE85u + 0x9E3779B9u * (uint32_t) k + 0xA54FF53Au * variant);
         out = {};
     }
 

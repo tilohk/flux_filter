@@ -182,6 +182,16 @@ src/presets/PresetManager.h // new factory set
    - Presets: Broken Radio and Deep Body use Rasp.
    - CPU (stereo, block 256, 48 kHz, every life process on incl. Rasp 50 %): 16 cells + 16 connections 3.0 % of one core.
 6. **Pitch anchor and Stereo life.**
+   **Built (2026-11-21):**
+   - `dsp/PitchAnchor.h`: scale quantiser and a YIN pitch detector.
+   - **Pitch** icon row (replaces Shape, ID `anchor`): Off / Scale / Follow; with **Key** (C…B, ID `anchorKey`) beside it and **Scale** (Chromatic, Major, Minor, minor Pentatonic, Harmonic = harmonic series of the key's root from C1, ID `anchorScale`) under it.
+   - Snapping comes after drift, life, width and modulation; Rasp's jitter still shakes the cells on top. Each cell glides to its new note in ~8 ms (no clicks when it hops). With anchoring on, Broken's quarter-octave grid is off. Pull strength is fixed, so Resonance decides how tonal it sounds.
+   - *Follow:* mono input, decimated to ~12 kHz, analysed every ~20 ms over 50–1000 Hz (threshold 0.15, parabolic interpolation). Quiet (< −60 dBFS) or unpitched passages keep the last pitch. Cells snap to the nearest harmonic. The detector only runs in Follow mode. Measured: within 2 cents on sine and saw from 55 to 880 Hz; on a 110 Hz saw, 109.98 Hz.
+   - Measured in Scale mode (A minor pentatonic): cells on a note (±5 cents) 100 % of the time when still, 98 % while drifting (Wander 50 %, Drift 0.2 Hz), 88 % at full Wander.
+   - **Stereo** icon row (replaces Direction, ID `stereoLife`): Linked / Independent. Independent gives the right channel its own chaos, its own population and its own rasp noise. Both chaos sources always run, so switching is seamless. Coupling's energy stays shared. In mono the field runs linked.
+   - Presets: Slow Tide (harmonics of A), Singing Drone (A minor pentatonic), Ripple Sweep (Follow), Glass Rain (independent).
+   - The LFOs' Flux share now always travels Up (Direction is gone) until phase 7.
+   - CPU (stereo, block 256, 48 kHz, everything on incl. independent stereo): 16 cells + 16 connections 3.0 %, with Follow 3.3 % of one core.
 7. **Parameters, LFO flux redefinition, UI:** Flux section, Cells labels, field display.
 8. **Polish:** new factory presets, benchmark, pluginval (strictness 10, VST3 + AU), auval, Ableton Live 12 by hand.
 
