@@ -39,10 +39,10 @@ public:
             addAndMakeVisible (c);
             return c;
         };
-        // Left: Turbulence, Stereo / Viscosity, Wavelength. Right: Rate, Travel with Shape and Direction under them.
+        // Left: Turbulence, Stereo / Coupling, Wavelength. Right: Drift, Wander with Shape and Direction under them.
         knob (spec::FP::Turbulence, "Turbulence");
         knob (spec::FP::FluxStereo, "Stereo");
-        knob (spec::FP::Viscosity, "Viscosity");
+        knob (spec::FP::Coupling, "Coupling");
         knob (spec::FP::Wavelength, "Wavelength");
         knob (spec::FP::Drift, "Drift");
         knob (spec::FP::Wander, "Wander");

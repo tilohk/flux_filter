@@ -65,6 +65,7 @@ int main()
                 s.density = density; s.resonance = 1.0f; s.driveDb = 24.0f;
                 s.character = (Character) character; s.limiter = limiter;
                 s.feedback = 1.0f; s.damping = 0.0f; s.width = 1.0f;
+                s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 5.0f; s.coupling = 1.0f;
                 f.setSettings (s); f.prepare (sr);
 
                 auto l = noise ((size_t) sr * 2, 1.0f, 1), r = noise ((size_t) sr * 2, 1.0f, 2);
@@ -283,6 +284,61 @@ int main()
 
         const auto again = trace (live, 20.0f);
         CHECK (again.f1 == t.f1, "the same settings should drift the same way on every start");
+    }
+
+    // 6b. Life, energy coupling: a tone on one cell excites its neighbours (fully inside its
+    //     formant, partly across the border), far cells stay calm; it lets go after the input
+    //     stops; it never runs away on its own and barely changes the level.
+    {
+        FieldSettings s; s.density = 9; s.fluxAmount = 1.0f; s.wander = 0.0f; s.coupling = 1.0f;
+        s.width = 0.0f; s.autoGain = false; s.limiter = false;
+        const float hz = settle (s)->getCellFrequency (2);   // top cell of F1
+        auto excite = [&] (FieldSettings d, float onSec, float offSec) {
+            auto f = std::make_unique<FluxField>(); f->setSettings (d); f->prepare (sr);
+            std::vector<float> buf (480);
+            for (int b = 0; b < (int) ((onSec + offSec) * 100.0f); ++b)
+            {
+                for (size_t i = 0; i < buf.size(); ++i)
+                    buf[i] = b < (int) (onSec * 100.0f) ? 0.2f * (float) std::sin (2.0 * M_PI * hz * (double) (b * 480 + (int) i) / sr) : 0.0f;
+                f->process (buf.data(), nullptr, (int) buf.size());
+            }
+            return f;
+        };
+        auto f = excite (s, 1.0f, 0.0f);
+        std::printf ("coupling: tone on cell 2, excitation of cells 0..8:");
+        for (int c = 0; c < 9; ++c) std::printf (" %.2f", f->getCellExcitation (c));
+        std::printf ("\n");
+        CHECK (f->getCellExcitation (1) > 0.5f, "inner neighbour not excited (%.2f)", f->getCellExcitation (1));
+        CHECK (f->getCellExcitation (3) > 0.1f, "neighbour across the formant border not excited (%.2f)", f->getCellExcitation (3));
+        for (int c = 5; c < 9; ++c)
+            CHECK (f->getCellExcitation (c) < 0.05f, "far cell %d excited (%.2f)", c, f->getCellExcitation (c));
+
+        auto released = excite (s, 1.0f, 5.0f);
+        CHECK (released->getCellExcitation (1) < 0.1f, "excitation should let go after the input stops (%.2f)", released->getCellExcitation (1));
+
+        for (auto off : { std::pair { 0.0f, 1.0f }, std::pair { 1.0f, 0.0f } })
+        {
+            FieldSettings d = s; d.fluxAmount = off.first; d.coupling = off.second;
+            auto g = excite (d, 1.0f, 0.0f);
+            float most = 0.0f; for (int c = 0; c < 9; ++c) most = std::max (most, g->getCellExcitation (c));
+            CHECK (most == 0.0f, "flux %.0f coupling %.0f should not excite (%.3f)", off.first, off.second, most);
+        }
+
+        FieldSettings hot = s; hot.resonance = 1.0f; hot.density = 16;
+        FluxField g; g.setSettings (hot); g.prepare (sr);
+        auto v = noise (48000, 0.3f); v.resize (48000 * 3, 0.0f); run (g, v, nullptr);
+        double tail = 0.0; for (size_t i = 48000 * 2; i < v.size(); ++i) tail += (double) v[i] * v[i];
+        CHECK (tail < 1e-6, "full coupling without feedback must not ring on (%.2e)", tail);
+
+        auto level = [&] (float coupling) {
+            FieldSettings d = s; d.coupling = coupling; d.resonance = 0.8f;
+            FluxField h; h.setSettings (d); h.prepare (sr);
+            auto w = noise (48000 * 3, 0.3f, 4); const double in = rmsTail (w); run (h, w, nullptr);
+            return 20.0 * std::log10 (rmsTail (w) / in);
+        };
+        const double l0 = level (0.0f), l1 = level (1.0f);
+        std::printf ("coupling: noise level %+.1f dB without, %+.1f dB at full coupling\n", l0, l1);
+        CHECK (std::abs (l1 - l0) < 1.5, "coupling changes the level by %.1f dB", l1 - l0);
     }
 
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,

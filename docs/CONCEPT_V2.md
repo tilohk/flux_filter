@@ -152,6 +152,15 @@ src/presets/PresetManager.h // new factory set
    - Tests: still at Flux 0 / Wander 0; at full the F1 and F3 cells roam ~2 oct, independently (correlation 0.3), at most 0.002 oct per control tick; Wander 0.25 roams less than half; Drift 4 Hz travels ~7× the path of 0.5 Hz.
    - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.0 % of one core.
 3. **Energy & coupling:** per-cell energy, audio-rate bleed with bounded loop gain, control-rate transfer.
+   **Built (2026-11-21):**
+   - **Coupling** (0–1, replaces Viscosity, ID `coupling`, default 30 %, mod target); strength = Flux × Coupling.
+   - Neighbours are the cells next to each other in the field: weight 1 inside a formant, 0.5 across a formant border.
+   - *Audio-rate bleed:* each cell also hears its neighbours' output from the previous sample, times up to 0.25. With at most weight 1 per side the loop gain stays below 0.5, so it never rings on by itself (no clipper needed). It makes neighbouring cells ring together like sympathetic strings.
+   - *Control-rate transfer:* each cell's energy (output level, 20 ms) relative to the field's average. A cell whose neighbours ring harder than average gets excited: up to +6 dB louder and 1.5× narrower, rising in ~80 ms, letting go over ~1.5 s. Resonance spreads outward from where the input hits and wanders on. Tone on the top F1 cell (9 cells, full coupling): excitation 1.0 / 0.97 inside F1, 0.24 across into F2, 0 in F3.
+   - Level: the excited gains go through the field's normalisation; measured, tones and noise stay within ±1.5 dB of no coupling, so no extra compensation.
+   - The excitation is the first per-cell life state; phase 4 builds vitality on it.
+   - The Viscosity of an LFO's Flux share is fixed at 0.2 until phase 7.
+   - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.3 % of one core (from 2.0 %).
 4. **Life cycle:** vitality, birth/death, Feed and Lifespan, normalisation over living cells.
 5. **Rasp:** jitter and subharmonic growl.
 6. **Pitch anchor and Stereo life.**

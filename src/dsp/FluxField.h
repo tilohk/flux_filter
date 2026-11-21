@@ -38,6 +38,7 @@ struct FieldSettings
     float fluxAmount = 0.25f;   // 0 = a still formant filter; scales every life process
     float driftHz    = 0.2f;    // speed of the chaos
     float wander     = 0.5f;    // how far it roams (times Flux)
+    float coupling   = 0.3f;    // how much ringing cells feed their neighbours (times Flux)
     // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
     PropagationSettings propagation;
 
@@ -90,6 +91,9 @@ public:
         agSmooth     = tickCoef (0.25f);
         tickDt       = 1.0f / ticksPerSecond;
         envCoef      = 1.0f - std::exp (-1.0f / (0.3f * sampleRate));   // loudness detectors, per sample
+        energyCoef   = tickCoef (0.02f);
+        excAttack    = tickCoef (0.08f);
+        excRelease   = tickCoef (1.5f);
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         mod.prepare (sampleRate, ticksPerSecond);
@@ -104,6 +108,9 @@ public:
     void reset() noexcept
     {
         for (auto& ch : cells) for (auto& c : ch) c.reset();
+        for (auto& ch : lastOut) ch.fill (0.0f);
+        for (auto& ch : energyAcc) ch.fill (0.0f);
+        energy.fill (0.0f); excitation.fill (0.0f); energySamples = 0;
         fbState.fill (0.0f); dampState.fill (0.0f); dcX.fill (0.0f); dcY.fill (0.0f);
         inPow = wetPow = 0.0f;
         samplesUntilTick = 0;
@@ -146,6 +153,8 @@ public:
                 wetSq += wet * wet * makeup * makeup;
             }
 
+            energySamples += numCh;
+
             // Linked loudness detectors (keep the stereo image intact).
             inPow  += (inSq  / (float) numCh - inPow)  * envCoef;
             wetPow += (wetSq / (float) numCh - wetPow) * envCoef;
@@ -178,6 +187,7 @@ public:
     float getCellGain (int i) const noexcept { return cellGain[(size_t) i]; }
     int   getCellFormant (int i) const noexcept { return formantOf[(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
+    float getCellExcitation (int i) const noexcept { return excitation[(size_t) i]; }
     float getMakeupDb() const noexcept { return 20.0f * std::log10 (makeup); }
     float getAutoGain() const noexcept { return agGain; }
     const Matrix& getMatrix() const noexcept { return mod; }
@@ -228,11 +238,24 @@ private:
 
     float processWet (float x, int ch) noexcept
     {
-        float sum = 0.0f;
+        // Coupling, audio rate: each cell also hears its neighbours' last output (bleed), so a ringing
+        // cell sets the cells next to it ringing, like sympathetic strings. The neighbour weights are
+        // at most 1 per side, so the loop gain stays below 2 * bleed (< 0.5): it never runs away.
+        auto& prev = lastOut[(size_t) ch];
+        auto& acc = energyAcc[(size_t) ch];
+        float sum = 0.0f, before = 0.0f;   // before: the previous cell's output from the last sample
         for (int c = 0; c < activeCells; ++c)
-            sum += cells[(size_t) ch][(size_t) c].process (x) * cellGain[(size_t) c]
-                 * levelMod[(size_t) ch][(size_t) c]
-                 * (stereo ? pan[(size_t) ch][(size_t) c] : 1.0f);
+        {
+            const auto ci = (size_t) c;
+            float in = x;
+            if (bleed > 0.0f)
+                in += bleed * (bleedLeft[ci] * before + bleedRight[ci] * prev[ci + 1]);   // bleedRight is 0 for the last cell
+            const float y = cells[(size_t) ch][ci].process (in);
+            before = prev[ci];
+            prev[ci] = y;
+            acc[ci] += y * y;
+            sum += y * cellGain[ci] * levelMod[(size_t) ch][ci] * (stereo ? pan[(size_t) ch][ci] : 1.0f);
+        }
         return sum * fieldNorm;
     }
 
@@ -254,6 +277,7 @@ private:
         glide (cur.damping, target.damping);
         glide (cur.fluxAmount, target.fluxAmount);
         glide (cur.wander, target.wander);
+        glide (cur.coupling, target.coupling);
         cur.driftHz = target.driftHz;
         glide (cur.propagation.travelSec, target.propagation.travelSec);
         glide (cur.propagation.viscosity, target.propagation.viscosity);
@@ -315,7 +339,7 @@ private:
         e.fluxAmount = m (FP::FluxAmount, cur.fluxAmount, ModTarget::FluxAmount);
         e.driftHz   = m (FP::Drift, cur.driftHz, ModTarget::Drift);
         e.wander    = m (FP::Wander, cur.wander, ModTarget::Wander);
-        e.propagation.viscosity  = m (FP::Viscosity, cur.propagation.viscosity, ModTarget::Viscosity);
+        e.coupling  = m (FP::Coupling, cur.coupling, ModTarget::Coupling);
         e.propagation.wavelength = m (FP::Wavelength, cur.propagation.wavelength, ModTarget::Wavelength);
         e.propagation.turbulence = m (FP::Turbulence, cur.propagation.turbulence, ModTarget::Turbulence);
         e.propagation.stereo     = m (FP::FluxStereo, cur.propagation.stereo, ModTarget::FluxStereo);
@@ -374,6 +398,14 @@ private:
             }
         }
         assignedCells = n;
+
+        // Bleed neighbours: the cells next to each other in the field; across a formant border at half weight.
+        for (int i = 0; i < n; ++i)
+        {
+            const auto ci = (size_t) i;
+            bleedLeft[ci]  = i > 0     ? (formantOf[ci - 1] == formantOf[ci] ? 1.0f : 0.5f) : 0.0f;
+            bleedRight[ci] = i + 1 < n ? (formantOf[ci + 1] == formantOf[ci] ? 1.0f : 0.5f) : 0.0f;
+        }
     }
 
     struct Placement { float octs, q, gainDb, widthOct; };   // widthOct: how far Width may detune L/R
@@ -413,6 +445,44 @@ private:
                  formantWidthOct + (maxWidthOct - formantWidthOct) * s };
     }
 
+    // Coupling, control rate: each cell's energy (its output level, ~20 ms) relative to the field's
+    // average. A cell whose neighbours ring harder than average gets excited: louder (up to +6 dB)
+    // and narrower (Q up to 1.5x). It rises in ~80 ms and lets go over ~1.5 s, so resonance spreads
+    // outward from where the input hits and wanders across the field. The bleed (audio rate) is
+    // set here too.
+    void updateCoupling (float amount) noexcept
+    {
+        const float n = (float) std::max (1, energySamples);
+        float mean = 0.0f;
+        for (int c = 0; c < activeCells; ++c)
+        {
+            const auto ci = (size_t) c;
+            const float level = (energyAcc[0][ci] + energyAcc[1][ci]) / n;
+            energy[ci] += (level - energy[ci]) * energyCoef;
+            energyAcc[0][ci] = energyAcc[1][ci] = 0.0f;
+            mean += energy[ci];
+        }
+        energySamples = 0;
+        mean = mean / (float) activeCells + 1.0e-9f;
+
+        for (int c = 0; c < activeCells; ++c)
+        {
+            const auto ci = (size_t) c;
+            const float wl = bleedLeft[ci], wr = bleedRight[ci];
+            const float drive = (wl * (c > 0 ? energy[ci - 1] : 0.0f) + wr * (c + 1 < activeCells ? energy[ci + 1] : 0.0f))
+                              / ((wl + wr + 1.0e-6f) * mean);
+            const float targetExc = amount * std::clamp (0.5f * (drive - 1.0f), 0.0f, 1.0f);
+            auto& ex = excitation[ci];
+            ex += (targetExc - ex) * (targetExc > ex ? excAttack : excRelease);
+            excitedGain[ci] = 1.0f + maxExcitedGain * ex;
+            excitedQ[ci] = 1.0f + maxExcitedQ * ex;
+        }
+
+        // The excited gains go into the level normalisation, and the bleed barely changes the level
+        // (measured: tones and pink noise within ±1 dB of no coupling), so no extra compensation.
+        bleed = maxBleed * amount;
+    }
+
     void controlTick (int sampleOffset) noexcept
     {
         smoothTowardsTarget();
@@ -425,6 +495,9 @@ private:
         // Life (phase 2): the chaos moves the throat. Flux × Wander sets how far; 0 = still.
         const auto& life = chaos.advance (e.driftHz, tickDt);
         const float roam = std::clamp (e.fluxAmount * e.wander, 0.0f, 1.0f);
+
+        // Life (phase 3): energy coupling. Flux × Coupling sets how strongly.
+        updateCoupling (std::clamp (e.fluxAmount * e.coupling, 0.0f, 1.0f));
         const float vowelNow = cur.vowel + roam * maxVowelWander * life.vowel;
         const float sizeNow = e.sizeOct + roam * maxSizeWanderOct * life.size;
         openness = roam * life.openness;
@@ -469,7 +542,7 @@ private:
             const float f = std::exp2 (base.octs);
             cellFreq[(size_t) c] = f;
             // Cells pushed above the usable range fade out instead of piling up at Nyquist.
-            targetGain[(size_t) c] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) : 0.0f;
+            targetGain[(size_t) c] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) * excitedGain[(size_t) c] : 0.0f;
 
             // Width: alternate cells lean left/right, and L/R cutoffs move apart slightly.
             const float side = (c % 2 == 0) ? 1.0f : -1.0f;
@@ -499,13 +572,14 @@ private:
                     octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
                 const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
                 cellFreqNow[(size_t) ch][(size_t) c] = chHz;
-                cellQ[(size_t) ch][(size_t) c] = pl.q;
+                const float q = std::min (maxQ, pl.q * excitedQ[(size_t) c]);
+                cellQ[(size_t) ch][(size_t) c] = q;
 
                 auto& cell = cells[(size_t) ch][(size_t) c];
-                cell.setCoefficients (chHz, pl.q, sampleRate);
+                cell.setCoefficients (chHz, q, sampleRate);
                 // The band state grows with Q (unity peak output = state / Q), so the limit scales
                 // with Q too: saturation then starts at the same output level at any resonance.
-                cell.setSaturation (satLimit * pl.q, satAsym);
+                cell.setSaturation (satLimit * q, satAsym);
             }
         }
 
@@ -544,7 +618,7 @@ private:
         // it came in (Auto Gain and the limiter catch the rest). Applied after the feedback loop.
         if (updateCoefficients && (makeupCounter++ % 16) == 0)
         {
-            float energy = 0.0f;
+            float pinkEnergy = 0.0f;
             for (int i = 0; i < makeupPoints; ++i)
             {
                 const float hz = 20.0f * std::exp2 ((float) i / makeupPointsPerOct);
@@ -559,9 +633,9 @@ private:
                     const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
                     sum += cellGain[(size_t) c] * stage * stage;
                 }
-                energy += std::norm (sum);
+                pinkEnergy += std::norm (sum);
             }
-            const float passedDb = 10.0f * std::log10 (std::max (1.0e-12f, fieldNorm * fieldNorm * energy / (float) makeupPoints));
+            const float passedDb = 10.0f * std::log10 (std::max (1.0e-12f, fieldNorm * fieldNorm * pinkEnergy / (float) makeupPoints));
             makeupTarget = std::pow (10.0f, std::clamp (makeupTargetDb - passedDb, 0.0f, maxMakeupDb) / 20.0f);
         }
         makeup += (makeupTarget - makeup) * smoothCoef;
@@ -622,6 +696,18 @@ private:
     FluxChaos chaos;
     float openness = 0.0f;
     std::array<float, formants::numFormants> formantDrift {};
+
+    // Life: energy coupling
+    static constexpr float maxBleed = 0.25f;
+    static constexpr float maxExcitedGain = 1.0f, maxExcitedQ = 0.5f;   // +6 dB, 1.5x Q at full excitation
+    std::array<std::array<float, maxCells + 1>, maxChannels> lastOut {};   // +1: the last cell reads a silent right neighbour
+    std::array<std::array<float, maxCells>, maxChannels> energyAcc {};
+    std::array<float, maxCells> energy {}, excitation {}, bleedLeft {}, bleedRight {};
+    std::array<float, maxCells> excitedGain = filled (1.0f), excitedQ = filled (1.0f);
+    int energySamples = 0;
+    float bleed = 0.0f;
+    float energyCoef = 1.0f, excAttack = 1.0f, excRelease = 1.0f;
+    static constexpr std::array<float, maxCells> filled (float v) { std::array<float, maxCells> a {}; a.fill (v); return a; }
     static constexpr int makeupPointsPerOct = 6, makeupPoints = 10 * makeupPointsPerOct + 1;   // 20 Hz … 20.5 kHz
     static constexpr float makeupTargetDb = -3.0f, maxMakeupDb = 12.0f;
     float makeup = 1.0f, makeupTarget = 1.0f;

@@ -47,7 +47,7 @@ public:
                                           { lfo (0, "Rate"), 0.2f }, { lfo (0, "Flux"), 1.0f } },
                                         slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.15f)) },
             { "Slow Tide", { { "density", 12 }, { "vowel", o }, { "size", 0.5f }, { "resonance", 0.55f }, { "scatter", 0.2f },
-                             { "flux", 0.6f }, { "drift", 0.07f }, { "wander", 0.95f }, { "viscosity", 0.7f },
+                             { "flux", 0.6f }, { "drift", 0.07f }, { "wander", 0.95f }, { "coupling", 0.6f },
                              { "character", warm }, { "feedback", 0.2f } } },
             { "Glass Rain", { { "density", 16 }, { "vowel", whisper }, { "size", -1.0f }, { "resonance", 0.9f }, { "scatter", 0.6f },
                               { "flux", 0.5f }, { "drift", 2.5f }, { "fluxShape", random }, { "turbulence", 0.8f },

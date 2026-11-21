@@ -142,7 +142,7 @@ namespace flux::params
             floatParam (FP::FluxAmount),
             floatParam (FP::Wander),
             choice (id::direction, "Direction", { "Up", "Down", "Outward", "Inward" }, 0),
-            floatParam (FP::Viscosity),
+            floatParam (FP::Coupling),
             floatParam (FP::Wavelength),
             floatParam (FP::Turbulence),
             floatParam (FP::FluxStereo));
