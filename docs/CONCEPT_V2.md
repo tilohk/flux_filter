@@ -126,7 +126,7 @@ src/dsp/FluxLife.h        // NEW: per-cell energy, vitality, birth/death, coupli
 src/dsp/FluxRasp.h        // NEW: audio-rate jitter + subharmonic period doubling
 src/dsp/PitchAnchor.h     // NEW: scale quantiser + input pitch detector
 src/dsp/FluxField.h       // reworked: formant placement, audio-rate bleed, life integration; feedback/safety kept
-src/dsp/FluxPropagator.h  // kept internally for the LFO flux share (no wave travel)
+src/dsp/FluxAbsorber.h    // NEW (phase 7): the LFO flux share, absorbed by the living cells (replaces FluxPropagator.h)
 src/params/*              // new IDs and ranges; removed wave parameters
 src/ui/*                  // Flux section and Cells labels, field display vitality/formant drawing
 src/presets/PresetManager.h // new factory set
@@ -193,6 +193,12 @@ src/presets/PresetManager.h // new factory set
    - The LFOs' Flux share now always travels Up (Direction is gone) until phase 7.
    - CPU (stereo, block 256, 48 kHz, everything on incl. independent stereo): 16 cells + 16 connections 3.0 %, with Follow 3.3 % of one core.
 7. **Parameters, LFO flux redefinition, UI:** Flux section, Cells labels, field display.
+   **Built (2026-11-21):**
+   - **LFO Flux, absorbed by life:** `dsp/FluxAbsorber.h` replaces `FluxPropagator.h`. Each cell hears its share of an LFO with its own delay (0–300 ms), depth (0.6–1.4×) and sluggishness (up to 120 ms), times its life gain, so a dead cell absorbs nothing. At LFO Flux 0 every cell moves exactly with the LFO. The right channel has its own traits when Stereo life is independent. Measured (12 cells): lags spread over ~0.3 s, swing 0.38–0.84 for one connection.
+   - All remnants of the travelling wave are gone (Travel, Direction, Viscosity, Wavelength, Turbulence, Flux Stereo settings); tooltips and comments now speak of absorbing.
+   - **Field display:** the cells of each formant mix a slight tint (F1 sand, F2 amber, F3 mauve, F4 blue-grey, F5 moss) into the channel colour. A small "F1…F5" label and tick sits under each formant's current target (vowel, drift, openness, size), fading out as Scatter rises. A cell excited by its neighbours gets a soft orange halo. Peak height already follows vitality, so births and deaths show.
+   - The Flux knob's tooltip describes it as "how alive the field is".
+   - CPU (stereo, block 256, 48 kHz, everything on): 16 cells + 16 connections 2.8 %, with Follow 3.2 % of one core.
 8. **Polish:** new factory presets, benchmark, pluginval (strictness 10, VST3 + AU), auval, Ableton Live 12 by hand.
 
 ## Verification

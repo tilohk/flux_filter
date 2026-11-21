@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ModSources.h"
-#include "dsp/FluxPropagator.h"
+#include "dsp/FluxAbsorber.h"
 #include "params/ParamSpec.h"
 
 #include <array>
@@ -14,8 +14,8 @@ namespace flux
 enum class ModSource : int { None = 0, Lfo1, Lfo2, Lfo3, Count };
 inline constexpr const char* modSourceNames[] = { "None", "LFO 1", "LFO 2", "LFO 3" };
 
-// Targets. The first three after None act per cell, so an LFO's Flux amount can send them through
-// the field as a wave. Everything else is a global parameter.
+// Targets. The first three after None act per cell, so an LFO's Flux amount can let the living
+// cells absorb them, each in its own way. Everything else is a global parameter.
 enum class ModTarget : int
 {
     None = 0,
@@ -97,7 +97,7 @@ struct ModSettings
 // Mod sources + connections, evaluated once per control tick by the field.
 //   tickSources()  – advance every source
 //   computeSlots() – sum all connections into global offsets, per-cell offsets and flux inputs
-//   propagate()    – send the flux inputs through the field (same Travel/Direction/... as the wave)
+//   absorb()       – let the living cells take up the flux inputs, each in its own way
 template <int MaxCells, int MaxChannels = 2>
 class ModMatrix
 {
@@ -107,7 +107,7 @@ public:
         sr = sampleRate;
         for (int i = 0; i < ModSettings::numLfos; ++i)
             lfos[(size_t) i].reset (0x1F123BB5u + 977u * (uint32_t) i);
-        for (auto& p : propagators) p.prepare (ticksPerSecond);
+        for (auto& a : absorbers) a.prepare (ticksPerSecond);
         values.fill (0.0f);
         globalOffset.fill (0.0f);
         cellDirect.fill (0.0f);
@@ -161,7 +161,7 @@ public:
             const float amount = slot.depth * source (slot.source);
             if (isCellTarget (slot.target))
             {
-                // The LFO's Flux amount decides how much of the movement travels through the field.
+                // The LFO's Flux amount decides how much of the movement the living cells absorb.
                 const auto k = (size_t) slot.target - (size_t) ModTarget::Vowel;
                 const float f = fluxShare (slot.source);
                 fluxInput[k] += amount * f;
@@ -179,20 +179,23 @@ public:
         return isLfo (s) ? std::clamp (settings.lfo[(size_t) s - (size_t) ModSource::Lfo1].flux, 0.0f, 1.0f) : 0.0f;
     }
 
-    void propagate (const PropagationSettings& p, int numCells) noexcept
+    using Weights = typename FluxAbsorber<MaxCells, MaxChannels>::Weights;
+
+    // weight: each cell's life gain per channel; numPops: 1 = linked stereo life, 2 = independent.
+    void absorb (const Weights& weight, int numCells, int numPops = 1) noexcept
     {
         for (int k = 0; k < numCellTargets; ++k)
-            propagators[(size_t) k].process (fluxInput[(size_t) k], p, numCells);
+            absorbers[(size_t) k].process (fluxInput[(size_t) k], weight, numCells, numPops);
     }
 
     // Normalised offset for a global target.
     float global (ModTarget t) const noexcept { return globalOffset[(size_t) t]; }
 
-    // Normalised offset for a per-cell target (direct connections + the flux wave at this cell).
+    // Normalised offset for a per-cell target (direct connections + what this cell absorbed).
     float cell (ModTarget t, int c, int ch) const noexcept
     {
         const auto k = (size_t) t - (size_t) ModTarget::Vowel;
-        return cellDirect[k] + propagators[k].get (c, ch);
+        return cellDirect[k] + absorbers[k].get (c, ch);
     }
 
     float source (ModSource s) const noexcept { return values[(size_t) s]; }
@@ -217,7 +220,7 @@ private:
     std::array<std::atomic<float>, (size_t) ModSource::Count> published {};
     std::array<float, (size_t) ModTarget::Count> globalOffset {};
     std::array<float, numCellTargets> cellDirect {}, fluxInput {};
-    std::array<FluxPropagator<MaxCells, MaxChannels>, numCellTargets> propagators;
+    std::array<FluxAbsorber<MaxCells, MaxChannels>, numCellTargets> absorbers;
 };
 
 static_assert (sizeof (modSourceNames) / sizeof (modSourceNames[0]) == (size_t) ModSource::Count);

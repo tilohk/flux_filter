@@ -337,7 +337,7 @@ private:
             g.setFont (juce::FontOptions (12.0f));
             g.drawText (modSourceNames[(int) source], name.withTrimmedLeft (4), juce::Justification::centredLeft);
 
-            if (fluxParam != nullptr && fluxParam->load() > 0.001f)   // this LFO's movement travels through the field
+            if (fluxParam != nullptr && fluxParam->load() > 0.001f)   // the living cells absorb this LFO's movement
             {
                 const auto tag = name.removeFromRight (32).withSizeKeepingCentre (32, 14).toFloat();
                 g.setColour (colours::flux.withAlpha (0.2f));

@@ -2,7 +2,6 @@
 
 #include "FluxCell.h"
 #include "FluxChaos.h"
-#include "FluxPropagator.h"
 #include "FormantTable.h"
 #include "PitchAnchor.h"
 #include "mod/ModMatrix.h"
@@ -49,8 +48,6 @@ struct FieldSettings
     AnchorMode  anchor = AnchorMode::Off;
     int         anchorKey = 0;          // 0 = C … 11 = B
     AnchorScale anchorScale = AnchorScale::Major;
-    // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
-    PropagationSettings propagation;
 
     float driveDb    = 0.0f;    // input saturation
     float mix        = 1.0f;    // dry/wet
@@ -88,8 +85,12 @@ public:
     // What the UI shows: written by the audio thread every control tick, read by the UI at any time.
     struct Snapshot
     {
-        std::atomic<int> activeCells { 0 };
+        std::atomic<int> activeCells { 0 }, numFormants { 1 };
         std::array<std::array<std::atomic<float>, maxCells>, maxChannels> freq {}, q {}, level {};
+        std::array<std::atomic<int>, maxCells> formant {};        // which formant each cell belongs to
+        std::array<std::atomic<float>, maxCells> glow {};         // excitation from its neighbours, 0..1
+        std::array<std::atomic<float>, formants::numFormants> target {};   // each formant's centre (Hz), left channel
+        std::atomic<float> scatter { 0.0f };
     };
 
     void prepare (double newSampleRate) noexcept
@@ -319,12 +320,7 @@ private:
         cur.anchorScale = target.anchorScale;
         glide (cur.coupling, target.coupling);
         cur.driftHz = target.driftHz;
-        glide (cur.propagation.travelSec, target.propagation.travelSec);
-        glide (cur.propagation.viscosity, target.propagation.viscosity);
-        glide (cur.propagation.wavelength, target.propagation.wavelength);
-        glide (cur.propagation.turbulence, target.propagation.turbulence);
         glide (cur.rasp, target.rasp);
-        cur.propagation.direction = target.propagation.direction;
         glide (cur.driveDb, target.driveDb);
         glide (cur.mix, target.mix);
         glide (cur.outputDb, target.outputDb);
@@ -364,6 +360,15 @@ private:
                 snapshot.q[cc][ci].store (cellQ[cc][ci], relaxed);
                 snapshot.level[cc][ci].store (cellGain[ci] * levelMod[cc][ci], relaxed);
             }
+        snapshot.numFormants.store (numFormants, relaxed);
+        for (int c = 0; c < activeCells; ++c)
+        {
+            snapshot.formant[(size_t) c].store (formantOf[(size_t) c], relaxed);
+            snapshot.glow[(size_t) c].store (excitation[(size_t) c], relaxed);
+        }
+        for (int k = 0; k < numFormants; ++k)
+            snapshot.target[(size_t) k].store (formantTargetHz[(size_t) k], relaxed);
+        snapshot.scatter.store (std::clamp (cur.scatter, 0.0f, 1.0f), relaxed);
     }
 
     // Global parameters after modulation (natural units).
@@ -721,6 +726,14 @@ private:
         updateRasp (std::clamp (e.fluxAmount * e.rasp, 0.0f, 1.0f));
         effMix = e.mix;
 
+        // For the display: where each formant is headed (vowel, drift, openness, size; left channel).
+        for (int k = 0; k < numFormants; ++k)
+        {
+            const auto fm = formants::at (vowelNow[0], k);
+            const float drift = formantDrift[0][(size_t) k] + openness[0] * (k == 0 ? opennessF1Oct : opennessOct);
+            formantTargetHz[(size_t) k] = std::exp2 (std::log2 (fm.hz) + drift - sizeNow[0]);
+        }
+
         // Pitch anchor (phase 6): Follow listens to the input every ~20 ms.
         const bool anchorOn = cur.anchor != AnchorMode::Off;
         if (cur.anchor == AnchorMode::Follow && ++pitchCounter >= pitchTicks)
@@ -751,8 +764,8 @@ private:
         if (assignedCells != activeCells)
             assignFormants (activeCells);
 
-        // LFO connections with a Flux share travel through the cells.
-        mod.propagate (e.propagation, activeCells);
+        // LFO connections with a Flux share: the living cells absorb them (last tick's life gains).
+        mod.absorb (levelMod, activeCells, numPopulations);
 
         const float maxHz = 0.45f * sampleRate;
         constexpr float vowelRange = (float) formants::numShapes;   // the Vowel knob spans the whole ring
@@ -950,6 +963,7 @@ private:
     std::array<float, maxChannels> openness {};
     std::array<std::array<float, formants::numFormants>, maxChannels> formantDrift {};
     int numPopulations = 1;
+    std::array<float, formants::numFormants> formantTargetHz {};
 
     // Pitch anchor
     PitchDetector pitch;

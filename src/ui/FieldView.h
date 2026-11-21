@@ -9,8 +9,10 @@ namespace flux::ui
 {
 
 // Live picture of the field: every cell as a resonance peak at its current frequency.
-// Peak width follows the cell's Q, height its level (tilt, flux level, matrix level).
-// Left channel teal, right channel magenta; where they overlap the image is stereo-identical.
+// Peak width follows the cell's Q, height its level (formant level, excitation, life), so births
+// and deaths are visible. Left channel sage, right clay rose; the cells of one formant share a
+// slight tint, so the formants read as humps. An excited cell (fed by its neighbours) glows.
+// A faint marker under each formant shows where it is headed (fades as the cells scatter).
 // Behind the cells: the spectrum of the filtered output (grey).
 class FieldView : public juce::Component, private juce::Timer
 {
@@ -45,8 +47,11 @@ public:
                 const float level = snap.level[(size_t) ch][(size_t) c].load (std::memory_order_relaxed);
                 if (f <= 0.0f || level <= 0.001f)
                     continue;
-                drawPeak (g, plot, f, q, level, chColour[ch]);
+                const int k = juce::jlimit (0, formants::numFormants - 1, snap.formant[(size_t) c].load (std::memory_order_relaxed));
+                const float glow = snap.glow[(size_t) c].load (std::memory_order_relaxed);
+                drawPeak (g, plot, f, q, level, chColour[ch].interpolatedWith (formantTint[k], 0.3f), glow);
             }
+        drawFormantTargets (g, plot, snap);   // on top, so small formants don't hide their label
 
         g.setColour (colours::dim);
         g.setFont (juce::FontOptions (11.0f));
@@ -55,6 +60,31 @@ public:
 
 private:
     static constexpr float minHz = 20.0f, maxHz = 20000.0f;
+
+    // A slight tint per formant (F1…F5), mixed into the channel colour.
+    inline static const juce::Colour formantTint[formants::numFormants] = {
+        juce::Colour (0xffd8cec2), juce::Colour (0xffe0b878), juce::Colour (0xffc9a0c8), juce::Colour (0xff8fb5c9), juce::Colour (0xffb8c98f) };
+
+    // A short tick and "F1"… at the bottom of the plot under each formant's target.
+    static void drawFormantTargets (juce::Graphics& g, const juce::Rectangle<float>& plot, const FluxField::Snapshot& snap)
+    {
+        const float alpha = 0.55f * (1.0f - snap.scatter.load (std::memory_order_relaxed));
+        if (alpha < 0.02f) return;
+        const int n = juce::jlimit (1, formants::numFormants, snap.numFormants.load (std::memory_order_relaxed));
+        g.setFont (juce::FontOptions (9.0f));
+        for (int k = 0; k < n; ++k)
+        {
+            const float hz = snap.target[(size_t) k].load (std::memory_order_relaxed);
+            if (hz < minHz || hz > maxHz) continue;
+            const float x = xFor (plot, hz);
+            const juce::Rectangle<float> label (x - 9.0f, plot.getBottom() - 20.0f, 18.0f, 11.0f);
+            g.setColour (colours::viewport.withAlpha (0.7f * alpha / 0.55f));
+            g.fillRoundedRectangle (label, 3.0f);
+            g.setColour (formantTint[k].withAlpha (alpha));
+            g.drawLine (x, plot.getBottom() - 8.0f, x, plot.getBottom(), 1.0f);
+            g.drawText ("F" + juce::String (k + 1), label, juce::Justification::centred);
+        }
+    }
 
     static float xFor (const juce::Rectangle<float>& plot, float hz)
     {
@@ -82,7 +112,7 @@ private:
 
     // A cell as a resonance peak that fades into the background: the curve reaches exactly zero at
     // its edges (no steps at the bottom), the fill is a gradient to transparent, only the top is stroked.
-    static void drawPeak (juce::Graphics& g, const juce::Rectangle<float>& plot, float hz, float q, float level, juce::Colour colour)
+    static void drawPeak (juce::Graphics& g, const juce::Rectangle<float>& plot, float hz, float q, float level, juce::Colour colour, float glow)
     {
         // Width in octaves: a resonance's -3 dB bandwidth is about 1.44/Q octaves; widened a bit to stay visible.
         const float bwOct = juce::jlimit (0.025f, 2.0f, 1.2f / juce::jmax (q, 0.1f));
@@ -117,6 +147,12 @@ private:
         const float top = plot.getBottom() - height;
         g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.35f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
         g.fillPath (fill);
+        if (glow > 0.02f)   // fed by its neighbours: a soft flux-coloured halo along the top
+        {
+            g.setGradientFill (juce::ColourGradient (colours::flux.withAlpha (0.45f * glow), 0.0f, top,
+                                                     colours::flux.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
+            g.strokePath (curve, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
         g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.95f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
         g.strokePath (curve, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }

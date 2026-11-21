@@ -79,7 +79,7 @@ private:
 };
 
 // An analog-style LFO: shape buttons, rate knob (note divisions when synced), sync, polarity and
-// the Flux amount (how much of its cell modulation travels through the field).
+// the Flux amount (how much of its cell modulation the living cells absorb).
 class LfoModule : public juce::Component, private juce::Timer
 {
 public:
@@ -126,8 +126,8 @@ public:
         updatePolarityText();
 
         flux.getSlider().getProperties().set (heroKnobProperty, true);   // looks like the big Flux knob
-        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Vowel, Resonance and Scatter travels "
-                                     "through the field, cell by cell (0 = all cells at once)");
+        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Vowel, Resonance and Scatter the living cells absorb: "
+                                     "each follows it with its own delay and depth, as far as it is alive (0 = all cells exactly together)");
         addAndMakeVisible (flux);
 
         startTimerHz (15);

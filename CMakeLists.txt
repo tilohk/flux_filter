@@ -32,7 +32,7 @@ target_sources(FluxFilter PRIVATE
         src/dsp/FluxChaos.h
         src/dsp/PitchAnchor.h
         src/dsp/FluxField.h
-        src/dsp/FluxPropagator.h
+        src/dsp/FluxAbsorber.h
         src/params/Parameters.h
         src/params/ParamSpec.h
         src/mod/ModSources.h

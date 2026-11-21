@@ -44,7 +44,7 @@ struct LfoSettings
     int   division = defaultLfoDivision;   // index into lfoDivisions
     bool  unipolar = false;      // 0..1 instead of -1..1
     ModLfoShape shape = ModLfoShape::Sine;
-    float flux = 0.0f;           // 0..1, share of the cell modulation that travels through the field
+    float flux = 0.0f;           // 0..1, share of the cell modulation the living cells absorb
 };
 
 struct Transport
