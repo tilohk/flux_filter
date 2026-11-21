@@ -206,6 +206,11 @@ private:
         connections = std::move (list);
         liveOffset = live;
         seenVersion = ctx.getVersion();
+        if (size == KnobSize::Hero)   // the big knob draws its value arc at the modulated value
+        {
+            slider.getProperties().set (liveOffsetProperty, connections.empty() ? 0.0f : liveOffset);
+            slider.repaint();
+        }
         repaint();
     }
 

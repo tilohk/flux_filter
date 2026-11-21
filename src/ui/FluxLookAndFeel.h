@@ -42,7 +42,8 @@ namespace colours
 
 // Slider properties understood by the look and feel.
 inline const juce::Identifier heroKnobProperty ("fluxHero");
-inline const juce::Identifier stepsProperty ("steps");   // number of positions: draws a marker per step
+inline const juce::Identifier stepsProperty ("steps");
+inline const juce::Identifier liveOffsetProperty ("liveOffset");   // hero knob: current modulation offset (0..1 space)   // number of positions: draws a marker per step
 
 class FluxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -132,18 +133,27 @@ public:
 
         const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;   // fills from the middle
         const float fromPos = bipolar ? (float) slider.valueToProportionOfLength (0.0) : 0.0f;
+        // The hero knob's value arc and lamp show where the modulation has it right now; its
+        // pointer stays on the knob's own setting.
+        const float livePos = hero ? juce::jlimit (0.0f, 1.0f, pos + (float) slider.getProperties().getWithDefault (liveOffsetProperty, 0.0f)) : pos;
         const float a0 = startAngle + fromPos * (endAngle - startAngle);
         const float a1 = startAngle + pos * (endAngle - startAngle);
-        if (std::abs (a1 - a0) > 0.001f)
+        const float aLive = startAngle + livePos * (endAngle - startAngle);
+        if (std::abs (aLive - a0) > 0.001f)
         {
             juce::Path value;
-            value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, juce::jmin (a0, a1), juce::jmax (a0, a1), true);
+            value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, juce::jmin (a0, aLive), juce::jmax (a0, aLive), true);
             g.setColour (slider.isEnabled() ? valueColour : colours::dim);
             g.strokePath (value, { lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
         }
 
         // Knob body: soft drop shadow, top-lit gradient, thin rim highlight.
         const float bodyR = arcR - lineW * 0.5f - lineW * (hero ? 1.4f : 0.9f);
+        if (hero)
+        {
+            drawHeroBody (g, centre, bodyR, a1, livePos, slider.isEnabled());
+            return;
+        }
         const auto body = juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (centre);
         g.setColour (juce::Colours::black.withAlpha (0.35f));
         g.fillEllipse (body.translated (0.0f, bodyR * 0.08f + 1.0f).expanded (1.0f));
@@ -210,6 +220,58 @@ public:
         g.setColour (colours::text);
         const float thumb = bipolar ? 14.0f : 11.0f;
         g.fillEllipse (juce::Rectangle<float> (thumb, thumb).withCentre ({ sliderPos, r.getCentreY() }));
+    }
+
+    // The big Flux knob: an analog, industrial control, kept clean. A finely knurled grip ring, a
+    // smooth dark-steel cap and an engraved pointer ending in a small amber lamp that lights up with
+    // the amount (pos: the live, modulated value).
+    static void drawHeroBody (juce::Graphics& g, juce::Point<float> c, float bodyR, float pointerAngle, float pos, bool enabled)
+    {
+        constexpr float twoPi = juce::MathConstants<float>::twoPi;
+        auto polar = [c] (float r, float a) { return juce::Point<float> (c.x + r * std::sin (a), c.y - r * std::cos (a)); };
+        auto disc = [c] (float r) { return juce::Rectangle<float> (2.0f * r, 2.0f * r).withCentre (c); };
+
+        // Shadow.
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.fillEllipse (disc (bodyR + 1.0f).translated (0.0f, bodyR * 0.06f + 1.0f));
+
+        // Grip ring: a dark ring with fine, low-contrast knurling.
+        const float capR = bodyR * 0.82f;
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff36302b), c.x, c.y - bodyR,
+                                                 juce::Colour (0xff181513), c.x, c.y + bodyR, false));
+        g.fillEllipse (disc (bodyR));
+        constexpr int grooves = 96;
+        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        for (int i = 0; i < grooves; ++i)
+        {
+            const float a = twoPi * (float) i / (float) grooves;
+            g.drawLine ({ polar (capR + 1.5f, a), polar (bodyR - 1.0f, a) }, 0.8f);
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.09f));
+        g.drawEllipse (disc (bodyR - 0.5f), 1.0f);
+
+        // Cap: smooth dark steel, top-lit, with a thin machined edge.
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4b443e), c.x, c.y - capR,
+                                                 juce::Colour (0xff25211e), c.x, c.y + capR, false));
+        g.fillEllipse (disc (capR));
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.16f), c.x, c.y - capR,
+                                                 juce::Colours::black.withAlpha (0.35f), c.x, c.y + capR, false));
+        g.drawEllipse (disc (capR - 0.5f), 1.2f);
+
+        // Engraved pointer and a small amber lamp at its tip.
+        const auto inner = polar (capR * 0.25f, pointerAngle), outer = polar (capR * 0.72f, pointerAngle);
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawLine ({ inner, outer }, 3.0f);
+        g.setColour (juce::Colours::white.withAlpha (enabled ? 0.18f : 0.08f));
+        g.drawLine ({ inner.translated (0.0f, 1.2f), outer.translated (0.0f, 1.2f) }, 0.7f);
+
+        const auto lampPos = polar (capR * 0.84f, pointerAngle);
+        const float glow = enabled ? 0.2f + 0.8f * pos : 0.1f;
+        g.setGradientFill (juce::ColourGradient (colours::flux.withAlpha (0.4f * glow), lampPos.x, lampPos.y,
+                                                 colours::flux.withAlpha (0.0f), lampPos.x + 7.0f, lampPos.y, true));
+        g.fillEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre (lampPos));
+        g.setColour (colours::flux.withAlpha (0.3f + 0.7f * glow));
+        g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre (lampPos));
     }
 
     // Where the knob is drawn inside a rotary slider's area (leaves room for modulation rings).

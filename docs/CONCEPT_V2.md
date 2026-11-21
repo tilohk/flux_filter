@@ -281,3 +281,10 @@ cells where the ear hears one filter. Changes:
   (broad arcs, r = R + (L − R) · sin (πt)^0.35, so they rise quickly and stay high) and light pulses flow along them upwards: from the bottom poles
   via the middle ones into the top one. The field stays close to the knob (outermost line 1.16–1.22 ×
   the ring radius); Flux adds lines (3 → 6), brightness, glow, pulse speed and sway.
+- **Big Flux knob look** (`drawHeroBody` in `FluxLookAndFeel.h`): an analog, industrial control,
+  kept clean, in the theme's warm greys and amber: a dark grip ring with fine low-contrast
+  knurling, a smooth top-lit dark-steel cap with a thin machined edge, an engraved pointer and a
+  small amber lamp at its tip that glows with the amount. The other knobs keep their plain look.
+- **Flux modulation is visible:** the big knob's value arc, its lamp and the magnetic field follow
+  the modulated value (knob + live modulation offset, from the UI's modulation readout); the pointer
+  stays on the knob's own setting.

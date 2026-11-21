@@ -105,7 +105,9 @@ private:
     void timerCallback() override
     {
         constexpr float dt = 1.0f / 30.0f;
-        const auto target = (float) slider.valueToProportionOfLength (slider.getValue());
+        // Follows the modulated value (the knob plus what its modulation adds right now).
+        const auto target = juce::jlimit (0.0f, 1.0f, (float) slider.valueToProportionOfLength (slider.getValue())
+                                                       + (float) slider.getProperties().getWithDefault (liveOffsetProperty, 0.0f));
         level += (target - level) * 0.15f;
         time += dt * (0.4f + 1.6f * level);
         repaint (juce::Rectangle<float> (centre, centre).expanded (ringR * 1.35f + 8.0f).toNearestInt());
@@ -132,6 +134,8 @@ public:
                                        "up: faster drift, shorter lives, cells exciting each other, more chaos");
         wander.getSlider().setTooltip ("Wander: how far the throat drifts (times Flux)");
         rasp.getSlider().setTooltip ("Rasp: roughness, jitter and a sub-octave growl (times Flux)");
+        for (auto* k : { &wander, &rasp })   // the secondary Flux knobs share the flux colour
+            k->getSlider().setColour (juce::Slider::rotarySliderFillColourId, colours::flux);
         for (auto* c : { &amount, &wander, &rasp })
             addAndMakeVisible (c);
     }
