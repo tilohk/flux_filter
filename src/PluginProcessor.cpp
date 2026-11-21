@@ -24,10 +24,6 @@ FluxFilterAudioProcessor::FluxFilterAudioProcessor()
     pCharacter = get (params::id::character);
     pAutoGain  = get (params::id::autoGain);
     pLimiter   = get (params::id::limiter);
-    pAnchor      = get (params::id::anchor);
-    pAnchorKey   = get (params::id::anchorKey);
-    pAnchorScale = get (params::id::anchorScale);
-    pStereoLife  = get (params::id::stereoLife);
 
     for (int i = 0; i < ModSettings::numLfos; ++i)
         lfoParams[(size_t) i] = { get (params::id::lfo (i, "Sync")), get (params::id::lfo (i, "Division")),
@@ -65,25 +61,17 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     FieldSettings s;
     s.density   = (int) pDensity->load();
     s.vowel     = value (FP::Vowel);
-    s.sizeOct   = value (FP::Size);
+    s.shiftOct  = value (FP::Shift);
+    s.stretch   = value (FP::Stretch);
     s.resonance = value (FP::Resonance);
     s.scatter   = value (FP::Scatter);
-    s.width     = value (FP::Width);
     s.character = (Character) (int) pCharacter->load();
     s.feedback  = value (FP::Feedback);
     s.damping   = value (FP::Damping);
     s.autoGain  = pAutoGain->load() > 0.5f;
     s.limiter   = pLimiter->load() > 0.5f;
     s.fluxAmount = value (FP::FluxAmount);
-    s.driftHz    = value (FP::Drift);
     s.wander     = value (FP::Wander);
-    s.anchor      = (AnchorMode) (int) pAnchor->load();
-    s.anchorKey   = (int) pAnchorKey->load();
-    s.anchorScale = (AnchorScale) (int) pAnchorScale->load();
-    s.stereoIndependent = pStereoLife->load() > 0.5f;
-    s.coupling   = value (FP::Coupling);
-    s.feed        = value (FP::Feed);
-    s.lifespanSec = value (FP::Lifespan);
     s.rasp        = value (FP::Rasp);
     s.driveDb   = value (FP::Drive);
     s.mix       = value (FP::Mix);
@@ -94,7 +82,7 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
 ModSettings FluxFilterAudioProcessor::readModSettings() const noexcept
 {
     ModSettings m;
-    const FP rate[] = { FP::Lfo1Rate, FP::Lfo2Rate, FP::Lfo3Rate };
+    const FP rate[] = { FP::Lfo1Rate, FP::Lfo2Rate };
     for (int i = 0; i < ModSettings::numLfos; ++i)
     {
         const auto& p = lfoParams[(size_t) i];

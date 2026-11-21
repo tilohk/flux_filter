@@ -225,3 +225,59 @@ src/presets/PresetManager.h // new factory set
 3. LFO Flux knob: "absorbed by the life" (section 3.7).
 4. v1 state and presets: dropped, no migration.
 5. Throat shapes: a, e, i, o, u + nasal, growl, schwa/open, whisper/hiss; ring order tuned by ear in phase 1.
+
+## Rework after the first listening (2026-11-21)
+Feedback after trying v2: the big Flux knob acted like a mix for the Flux section; the many small
+knobs and the pitch/scale/stereo controls were unusual for a filter; the display showed separate
+cells where the ear hears one filter. Changes:
+
+- **Flux is a macro (calm → chaotic).** It feeds the field with energy and movement and drives every
+  life process on its own curve (`FluxMacro` in `FluxField.h`):
+
+  | Flux | 0 | 0.5 | 1 |
+  |---|---|---|---|
+  | Drift speed | 0.05 Hz | 0.35 Hz | 2.5 Hz |
+  | Lifespan | 12 s | 1.7 s | 0.25 s |
+  | Coupling | 0 | 0.35 | 1 |
+  | Feed (1 = input energy, 0 = chance) | 0.8 | 0.55 | 0.3 |
+  | Life depth | 0 | 0.5 | 1 |
+
+  Drift, Lifespan, Coupling and Feed are no longer parameters. **Wander** and **Rasp** stay as the
+  only secondary Flux knobs (both still scaled by Flux, so Flux 0 is always a still, clean filter).
+- **LFO Flux share:** at field Flux 0 the living cells follow the LFO in lockstep; as Flux rises they
+  spread out with their own delay, depth and sluggishness (`FluxAbsorber::process (…, scatter)`).
+- **Size → Shift**, in octaves, + = higher formants.
+- **Dropped:** pitch anchor (Scale/Follow, key, scale; `PitchAnchor.h` deleted), stereo life, and
+  the Width knob. Both channels now share one chaos, one population, one rasp and identical
+  coefficients, so the stereo image passes through unchanged (a mono signal stays bit-identical L/R).
+- **Display:** one line, the combined response (all living cells summed with their phases, the
+  feedback loop with damping, makeup/auto gain and the dry/wet mix), on a dB scale with a 0 dB
+  reference. Excited cells make the line glow in the flux colour. No per-cell peaks, formant
+  markers or cell count.
+- **UI:** the Flux section holds the big knob with Wander and Rasp beside it; the Cells section has
+  five knobs; the window is 980 px wide (was 1140).
+- Presets reworked to the new parameters ("Harmonic Shadow" became "Vowel Shadow").
+- Verified: FluxFieldTest and FluxModTest pass (new: mono stays mono, Flux macro curves and births,
+  lockstep at Flux 0); FluxPresetCheck passes; pluginval strictness 10 (VST3, AU) and auval pass.
+  CPU not re-measured (the pitch detector and the second population are gone, so it can only drop).
+
+### Details round (2026-11-21)
+- **Mix** defaults to 50 %; no factory preset overrides it any more. Preset output gains were
+  lowered to match (all presets now land 3.4–5.3 dB under the input on noise and saw).
+- **Cells → Shape** (section and parameter group). New sixth knob **Stretch** (−1..1, modulatable):
+  the spacing of the formants above F1 in octaves × 0.62…1.62, bandwidths scaled along, so familiar
+  vowels turn strange.
+- **LFO 3 dropped** (source, rate/flux parameters, rate target); "Drone Organism" uses LFO 2 instead.
+- **Layout:** bottom row LFO 1 | LFO 2 | Modulation (equal widths); middle row Shape (as wide as an
+  LFO, 3 × 2 knobs) | Flux (rest: the big knob at the window's horizontal centre, Wander and Rasp stacked to its right) |
+  Character (as wide as Output). Window 880 × 778 (was 980 × 794).
+- **Display:** the response line is computed at 400 points and averaged over about 1/5 octave
+  before drawing (quadratic midpoint path), so narrow resonances read as soft hills, not needles.
+- **Modulation panel:** each connection is two lines (source and value, then a thick bar in the
+  source's colour across the whole row); the FLUX badge is gone.
+- **Flux aura:** an animated magnetic field around the big knob (`FluxAura` in `Sections.h`, an
+  overlay over the whole editor panel). Five poles sit evenly along the value ring (its ends at 225°
+  and 135°, ±67.5°, and the top); nested field lines arc between neighbouring poles
+  (broad arcs, r = R + (L − R) · sin (πt)^0.35, so they rise quickly and stay high) and light pulses flow along them upwards: from the bottom poles
+  via the middle ones into the top one. The field stays close to the knob (outermost line 1.16–1.22 ×
+  the ring radius); Flux adds lines (3 → 6), brightness, glow, pulse speed and sway.

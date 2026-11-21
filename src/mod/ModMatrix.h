@@ -11,8 +11,8 @@
 namespace flux
 {
 
-enum class ModSource : int { None = 0, Lfo1, Lfo2, Lfo3, Count };
-inline constexpr const char* modSourceNames[] = { "None", "LFO 1", "LFO 2", "LFO 3" };
+enum class ModSource : int { None = 0, Lfo1, Lfo2, Count };
+inline constexpr const char* modSourceNames[] = { "None", "LFO 1", "LFO 2" };
 
 // Targets. The first three after None act per cell, so an LFO's Flux amount can let the living
 // cells absorb them, each in its own way. Everything else is a global parameter.
@@ -20,23 +20,23 @@ enum class ModTarget : int
 {
     None = 0,
     Vowel, Resonance, Scatter,                                 // per cell
-    Size, Width, Feedback, Damping,
-    Drift, FluxAmount, Wander, Coupling, Feed, Lifespan, Rasp,
+    Shift, Stretch, Feedback, Damping,
+    FluxAmount, Wander, Rasp,
     Drive, Mix, Output,
-    Lfo1Rate, Lfo2Rate, Lfo3Rate,
+    Lfo1Rate, Lfo2Rate,
     Count
 };
 inline constexpr const char* modTargetNames[] = {
     "None", "Vowel (cells)", "Resonance (cells)", "Scatter (cells)",
-    "Size", "Width", "Feedback", "Damping",
-    "Drift", "Flux", "Wander", "Coupling", "Feed", "Lifespan", "Rasp",
+    "Shift", "Stretch", "Feedback", "Damping",
+    "Flux", "Wander", "Rasp",
     "Drive", "Mix", "Output",
-    "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate"
+    "LFO 1 Rate", "LFO 2 Rate"
 };
 
 inline constexpr int numCellTargets = 3;   // Vowel, Resonance, Scatter
 inline constexpr bool isCellTarget (ModTarget t) noexcept { return t >= ModTarget::Vowel && t <= ModTarget::Scatter; }
-inline constexpr bool isLfo (ModSource s) noexcept { return s >= ModSource::Lfo1 && s <= ModSource::Lfo3; }
+inline constexpr bool isLfo (ModSource s) noexcept { return s >= ModSource::Lfo1 && s <= ModSource::Lfo2; }
 
 // The parameter (knob) a target modulates.
 inline spec::FP targetParam (ModTarget t) noexcept
@@ -47,23 +47,18 @@ inline spec::FP targetParam (ModTarget t) noexcept
         case ModTarget::Vowel:      return FP::Vowel;
         case ModTarget::Resonance:  return FP::Resonance;
         case ModTarget::Scatter:    return FP::Scatter;
-        case ModTarget::Size:       return FP::Size;
-        case ModTarget::Width:      return FP::Width;
+        case ModTarget::Shift:      return FP::Shift;
+        case ModTarget::Stretch:    return FP::Stretch;
         case ModTarget::Feedback:   return FP::Feedback;
         case ModTarget::Damping:    return FP::Damping;
-        case ModTarget::Drift:      return FP::Drift;
         case ModTarget::FluxAmount: return FP::FluxAmount;
         case ModTarget::Wander:     return FP::Wander;
-        case ModTarget::Coupling:   return FP::Coupling;
-        case ModTarget::Feed:       return FP::Feed;
-        case ModTarget::Lifespan:   return FP::Lifespan;
         case ModTarget::Rasp:       return FP::Rasp;
         case ModTarget::Drive:      return FP::Drive;
         case ModTarget::Mix:        return FP::Mix;
         case ModTarget::Output:     return FP::Output;
         case ModTarget::Lfo1Rate:   return FP::Lfo1Rate;
         case ModTarget::Lfo2Rate:   return FP::Lfo2Rate;
-        case ModTarget::Lfo3Rate:   return FP::Lfo3Rate;
         case ModTarget::None:
         case ModTarget::Count:      return FP::Count;
     }
@@ -89,7 +84,7 @@ struct SlotSettings
 
 struct ModSettings
 {
-    static constexpr int numLfos = 3, numSlots = 16;
+    static constexpr int numLfos = 2, numSlots = 16;
     std::array<LfoSettings, numLfos> lfo {};
     std::array<SlotSettings, numSlots> slots {};
 };
@@ -98,7 +93,7 @@ struct ModSettings
 //   tickSources()  – advance every source
 //   computeSlots() – sum all connections into global offsets, per-cell offsets and flux inputs
 //   absorb()       – let the living cells take up the flux inputs, each in its own way
-template <int MaxCells, int MaxChannels = 2>
+template <int MaxCells>
 class ModMatrix
 {
 public:
@@ -131,8 +126,8 @@ public:
 
         values[(size_t) ModSource::None] = 0.0f;
 
-        const spec::FP rateParams[] = { spec::FP::Lfo1Rate, spec::FP::Lfo2Rate, spec::FP::Lfo3Rate };
-        const ModTarget rateTargets[] = { ModTarget::Lfo1Rate, ModTarget::Lfo2Rate, ModTarget::Lfo3Rate };
+        const spec::FP rateParams[] = { spec::FP::Lfo1Rate, spec::FP::Lfo2Rate };
+        const ModTarget rateTargets[] = { ModTarget::Lfo1Rate, ModTarget::Lfo2Rate };
         for (int i = 0; i < ModSettings::numLfos; ++i)
         {
             const auto& ls = settings.lfo[(size_t) i];
@@ -179,23 +174,23 @@ public:
         return isLfo (s) ? std::clamp (settings.lfo[(size_t) s - (size_t) ModSource::Lfo1].flux, 0.0f, 1.0f) : 0.0f;
     }
 
-    using Weights = typename FluxAbsorber<MaxCells, MaxChannels>::Weights;
+    using Weights = typename FluxAbsorber<MaxCells>::Weights;
 
-    // weight: each cell's life gain per channel; numPops: 1 = linked stereo life, 2 = independent.
-    void absorb (const Weights& weight, int numCells, int numPops = 1) noexcept
+    // weight: each cell's life gain; scatter: the field's Flux (0 = the cells follow in lockstep).
+    void absorb (const Weights& weight, int numCells, float scatter = 1.0f) noexcept
     {
         for (int k = 0; k < numCellTargets; ++k)
-            absorbers[(size_t) k].process (fluxInput[(size_t) k], weight, numCells, numPops);
+            absorbers[(size_t) k].process (fluxInput[(size_t) k], weight, numCells, scatter);
     }
 
     // Normalised offset for a global target.
     float global (ModTarget t) const noexcept { return globalOffset[(size_t) t]; }
 
     // Normalised offset for a per-cell target (direct connections + what this cell absorbed).
-    float cell (ModTarget t, int c, int ch) const noexcept
+    float cell (ModTarget t, int c) const noexcept
     {
         const auto k = (size_t) t - (size_t) ModTarget::Vowel;
-        return cellDirect[k] + absorbers[k].get (c, ch);
+        return cellDirect[k] + absorbers[k].get (c);
     }
 
     float source (ModSource s) const noexcept { return values[(size_t) s]; }
@@ -220,7 +215,7 @@ private:
     std::array<std::atomic<float>, (size_t) ModSource::Count> published {};
     std::array<float, (size_t) ModTarget::Count> globalOffset {};
     std::array<float, numCellTargets> cellDirect {}, fluxInput {};
-    std::array<FluxAbsorber<MaxCells, MaxChannels>, numCellTargets> absorbers;
+    std::array<FluxAbsorber<MaxCells>, numCellTargets> absorbers;
 };
 
 static_assert (sizeof (modSourceNames) / sizeof (modSourceNames[0]) == (size_t) ModSource::Count);

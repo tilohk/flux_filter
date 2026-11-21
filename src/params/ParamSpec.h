@@ -42,12 +42,12 @@ struct FloatSpec
 // Index of every continuous parameter.
 enum class FP : int
 {
-    Vowel, Size, Resonance, Scatter, Width,
+    Vowel, Shift, Stretch, Resonance, Scatter,
     Feedback, Damping,
-    Drift, FluxAmount, Wander, Coupling, Feed, Lifespan, Rasp,
+    FluxAmount, Wander, Rasp,
     Drive, Mix, Output,
-    Lfo1Rate, Lfo2Rate, Lfo3Rate,
-    Lfo1Flux, Lfo2Flux, Lfo3Flux,
+    Lfo1Rate, Lfo2Rate,
+    Lfo1Flux, Lfo2Flux,
     Count
 };
 
@@ -55,29 +55,23 @@ inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
 {
     static const std::array<FloatSpec, (size_t) FP::Count> table {{
         { "vowel",      "Vowel",           0.0f,  9.0f,     0.0f },                         // ring position, see dsp/FormantTable.h
-        { "size",       "Size",            -2.0f, 2.0f,     0.0f,   0.0f,   0.0f,  "oct" }, // throat size; + = bigger = lower formants
+        { "shift",      "Shift",           -2.0f, 2.0f,     0.0f,   0.0f,   0.0f,  "oct" }, // moves every formant; + = higher
+        { "stretch",    "Stretch",         -1.0f, 1.0f,     0.0f },                          // formant spacing: - = squeezed, + = apart
         { "resonance",  "Resonance",       0.0f,  1.0f,     0.6f },
         { "scatter",    "Scatter",         0.0f,  1.0f,     0.0f },
-        { "width",      "Width",           0.0f,  1.0f,     0.5f },
         { "feedback",   "Feedback",        0.0f,  1.0f,     0.0f },
         { "damping",    "Damping",         0.0f,  1.0f,     0.3f },
-        { "drift",      "Drift",           0.01f, 5.0f,     0.2f,   0.3f,   0.0f,  "Hz" },  // speed of the chaos
-        { "flux",       "Flux",            0.0f,  1.0f,     0.25f },
+        { "flux",       "Flux",            0.0f,  1.0f,     0.25f },                         // calm → chaotic: drives every life process
         { "wander",     "Wander",          0.0f,  1.0f,     0.5f },                          // how far the chaos roams
-        { "coupling",   "Coupling",        0.0f,  1.0f,     0.3f },                          // ringing cells feed their neighbours
-        { "feed",       "Feed",            0.0f,  1.0f,     0.5f },                          // life cycle: chance ↔ input energy
-        { "lifespan",   "Lifespan",        0.05f, 20.0f,    2.0f,   1.5f,   0.0f,  "s" },   // mean life of a cell
         { "rasp",       "Rasp",            0.0f,  1.0f,     0.0f },                          // throat roughness: jitter + growl
         { "drive",      "Drive",           0.0f,  24.0f,    0.0f,   0.0f,   0.01f, "dB" },
-        { "mix",        "Mix",             0.0f,  1.0f,     1.0f },
+        { "mix",        "Mix",             0.0f,  1.0f,     0.5f },
         { "output",     "Gain",            -24.0f, 24.0f,   0.0f,   0.0f,   0.01f, "dB" },
 
         { "lfo1Rate",   "LFO 1 Rate",      0.01f, 30.0f,    0.5f,   1.0f,   0.0f,  "Hz" },
         { "lfo2Rate",   "LFO 2 Rate",      0.01f, 30.0f,    1.3f,   1.0f,   0.0f,  "Hz" },
-        { "lfo3Rate",   "LFO 3 Rate",      0.01f, 30.0f,    0.17f,  1.0f,   0.0f,  "Hz" },
         { "lfo1Flux",   "LFO 1 Flux",      0.0f,  1.0f,     1.0f },
         { "lfo2Flux",   "LFO 2 Flux",      0.0f,  1.0f,     0.0f },
-        { "lfo3Flux",   "LFO 3 Flux",      0.0f,  1.0f,     0.0f },
     }};
     return table;
 }

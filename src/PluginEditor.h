@@ -21,7 +21,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int designWidth = 1140, designHeight = 794;
+    static constexpr int designWidth = 880, designHeight = 778;
 
 private:
    #if JUCE_DEBUG
@@ -38,11 +38,12 @@ private:
     private:
         flux::ui::PresetBar presetBar;
         flux::ui::FieldView fieldView;
-        flux::ui::ParamSection cells { "Cells", 3 }, character { "Character", 2 };
+        flux::ui::ParamSection cells { "Shape", 3 }, character { "Character", 2 };
         flux::ui::FluxSection flux;
         flux::ui::OutputSection output;
         std::vector<std::unique_ptr<flux::ui::LfoModule>> lfos;
         flux::ui::ModPanel modPanel;
+        flux::ui::FluxAura aura { flux.getFluxSlider() };   // on top of everything, takes no clicks
     };
 
     flux::ui::FluxLookAndFeel lookAndFeel;

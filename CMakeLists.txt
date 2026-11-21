@@ -30,7 +30,6 @@ target_sources(FluxFilter PRIVATE
         src/dsp/FluxCell.h
         src/dsp/FormantTable.h
         src/dsp/FluxChaos.h
-        src/dsp/PitchAnchor.h
         src/dsp/FluxField.h
         src/dsp/FluxAbsorber.h
         src/params/Parameters.h

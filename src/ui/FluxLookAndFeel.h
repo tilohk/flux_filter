@@ -33,7 +33,6 @@ namespace colours
         {
             case ModSource::Lfo1:  return juce::Colour (0xff4d8dff);   // blue
             case ModSource::Lfo2:  return juce::Colour (0xffff4f6e);   // red
-            case ModSource::Lfo3:  return juce::Colour (0xff8ae65a);   // green
             case ModSource::None:
             case ModSource::Count: break;
         }
@@ -189,24 +188,28 @@ public:
         }
 
         const auto r = juce::Rectangle<int> (x, y, width, height).toFloat();
-        const auto trackArea = r.withSizeKeepingCentre (r.getWidth(), 4.0f);
+        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
+        const float thickness = bipolar ? 10.0f : 4.0f;   // matrix depth bars: thick and easy to grab
+        const auto trackArea = r.withSizeKeepingCentre (r.getWidth(), thickness);
         g.setColour (colours::track);
-        g.fillRoundedRectangle (trackArea, 2.0f);
+        g.fillRoundedRectangle (trackArea, thickness * 0.5f);
 
         // Bipolar sliders (matrix depth) fill from the middle, so 0 looks empty.
-        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
         const float from = bipolar ? r.getX() + (float) slider.valueToProportionOfLength (0.0) * r.getWidth() : r.getX();
         const float a = juce::jmin (from, sliderPos), b = juce::jmax (from, sliderPos);
-        g.setColour (slider.isEnabled() ? colours::accent : colours::dim);
-        g.fillRoundedRectangle (trackArea.withX (a).withWidth (juce::jmax (0.0f, b - a)), 2.0f);
+        const auto fillColour = slider.isColourSpecified (juce::Slider::trackColourId) ? slider.findColour (juce::Slider::trackColourId)
+                                                                                       : colours::accent;
+        g.setColour (slider.isEnabled() ? fillColour : colours::dim);
+        g.fillRoundedRectangle (trackArea.withX (a).withWidth (juce::jmax (0.0f, b - a)), thickness * 0.5f);
 
         if (bipolar)
         {
             g.setColour (colours::dim);
-            g.fillRect (juce::Rectangle<float> (1.0f, 8.0f).withCentre ({ from, r.getCentreY() }));
+            g.fillRect (juce::Rectangle<float> (1.5f, thickness + 6.0f).withCentre ({ from, r.getCentreY() }));
         }
         g.setColour (colours::text);
-        g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ sliderPos, r.getCentreY() }));
+        const float thumb = bipolar ? 14.0f : 11.0f;
+        g.fillEllipse (juce::Rectangle<float> (thumb, thumb).withCentre ({ sliderPos, r.getCentreY() }));
     }
 
     // Where the knob is drawn inside a rotary slider's area (leaves room for modulation rings).

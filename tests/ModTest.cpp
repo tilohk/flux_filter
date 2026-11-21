@@ -18,19 +18,19 @@ static constexpr int tickLen = FluxField::controlInterval;
 static constexpr float ticksPerSec = sr / (float) tickLen;
 static constexpr float dt = 1.0f / ticksPerSec;
 
-using Matrix = ModMatrix<24, 2>;
+using Matrix = ModMatrix<24>;
 
 // Runs the matrix alone for `seconds`.
 template <typename OnTick>
-static void runMatrix (Matrix& m, float seconds, OnTick onTick, const Matrix::Weights* weights = nullptr, int cells = 12)
+static void runMatrix (Matrix& m, float seconds, OnTick onTick, const Matrix::Weights* weights = nullptr, float scatter = 1.0f, int cells = 12)
 {
     const int ticks = (int) (seconds * ticksPerSec);
     for (int k = 0; k < ticks; ++k)
     {
         m.tickSources (dt, 0);
         m.computeSlots();
-        static const Matrix::Weights allAlive = [] { Matrix::Weights w {}; for (auto& ch : w) ch.fill (1.0f); return w; }();
-        m.absorb (weights != nullptr ? *weights : allAlive, cells);
+        static const Matrix::Weights allAlive = [] { Matrix::Weights w {}; w.fill (1.0f); return w; }();
+        m.absorb (weights != nullptr ? *weights : allAlive, cells, scatter);
         onTick ((float) k * dt);
     }
 }
@@ -100,31 +100,33 @@ int main()
         s.lfo[0].rateHz = 0.7f;
         s.slots[0] = { ModSource::Lfo1, ModTarget::Mix, 0.5f };
         s.slots[1] = { ModSource::Lfo1, ModTarget::Mix, 0.25f };
-        s.slots[2] = { ModSource::Lfo1, ModTarget::Width, -1.0f };
+        s.slots[2] = { ModSource::Lfo1, ModTarget::Shift, -1.0f };
         m.setSettings (s);
         runMatrix (m, 0.3f, [] (float) {});
         const float lfo = m.source (ModSource::Lfo1);
-        std::printf ("connections: lfo %.3f → mix offset %.3f, width offset %.3f\n", lfo, m.global (ModTarget::Mix), m.global (ModTarget::Width));
+        std::printf ("connections: lfo %.3f → mix offset %.3f, shift offset %.3f\n", lfo, m.global (ModTarget::Mix), m.global (ModTarget::Shift));
         CHECK (std::abs (m.global (ModTarget::Mix) - 0.75f * lfo) < 1e-6f, "mix offset %.3f", m.global (ModTarget::Mix));
-        CHECK (std::abs (m.global (ModTarget::Width) + lfo) < 1e-6f, "width offset %.3f", m.global (ModTarget::Width));
+        CHECK (std::abs (m.global (ModTarget::Shift) + lfo) < 1e-6f, "shift offset %.3f", m.global (ModTarget::Shift));
         CHECK (std::abs (Matrix::modulated (spec::FP::Mix, 0.8f, 0.5f) - 1.0f) < 1e-6f, "modulated value must clamp to range");
         CHECK (targetForParam (spec::FP::Vowel) == ModTarget::Vowel && targetForParam (spec::FP::Mix) == ModTarget::Mix, "knob → target map");
     }
 
     // 7. The LFO's Flux amount: without it every cell moves exactly with the LFO; with it the
     //    living cells absorb the movement, each with its own delay (up to 0.3 s) and depth; a dead
-    //    cell (life gain 0) absorbs nothing.
-    for (bool flux : { false, true })
+    //    cell (life gain 0) absorbs nothing. At field Flux 0 the living cells absorb it in lockstep.
+    for (int mode = 0; mode < 3; ++mode)   // 0: LFO flux off, 1: on at field Flux 1, 2: on at field Flux 0
     {
+        const bool flux = mode > 0;
+        const float fieldFlux = mode == 2 ? 0.0f : 1.0f;
         Matrix m; m.prepare (sr, ticksPerSec);
         ModSettings s;
         s.lfo[0].rateHz = 0.5f; s.lfo[0].flux = flux ? 1.0f : 0.0f;
         s.slots[0] = { ModSource::Lfo1, ModTarget::Vowel, 0.3f };
         m.setSettings (s);
-        Matrix::Weights w {}; for (auto& ch : w) ch.fill (1.0f);
-        w[0][5] = 0.0f;   // cell 5 is dead
+        Matrix::Weights w {}; w.fill (1.0f);
+        w[5] = 0.0f;   // cell 5 is dead
         std::vector<std::vector<float>> trace (12);
-        runMatrix (m, 6.0f, [&] (float) { for (int c = 0; c < 12; ++c) trace[(size_t) c].push_back (m.cell (ModTarget::Vowel, c, 0)); }, &w);
+        runMatrix (m, 6.0f, [&] (float) { for (int c = 0; c < 12; ++c) trace[(size_t) c].push_back (m.cell (ModTarget::Vowel, c)); }, &w, fieldFlux);
 
         auto lagOf = [&] (const std::vector<float>& a, const std::vector<float>& b) {   // how much later b follows a
             int best = 0; double bestC = -1e9;
@@ -146,9 +148,14 @@ int main()
             depthLo = std::min (depthLo, *mx - *mn); depthHi = std::max (depthHi, *mx - *mn);
         }
         const auto [deadLo, deadHi] = std::minmax_element (trace[5].begin(), trace[5].end());
-        std::printf ("matrix LFO → vowel, flux %s: cells lag between %.3f and %.3f s, swing %.3f..%.3f; dead cell swing %.3f\n",
-                     flux ? "on " : "off", lo, hi, depthLo, depthHi, *deadHi - *deadLo);
-        if (flux)
+        std::printf ("matrix LFO → vowel, LFO flux %s, field Flux %.0f: cells lag between %.3f and %.3f s, swing %.3f..%.3f; dead cell swing %.3f\n",
+                     flux ? "on " : "off", fieldFlux, lo, hi, depthLo, depthHi, *deadHi - *deadLo);
+        if (mode == 2)
+        {
+            CHECK (hi - lo < 1e-6f && depthHi - depthLo < 1e-5f, "at field Flux 0 the living cells should move in lockstep");
+            CHECK (*deadHi - *deadLo < 1e-6f, "a dead cell absorbs nothing (%.4f)", *deadHi - *deadLo);
+        }
+        else if (flux)
         {
             // Delays up to 0.3 s, plus the phase lag of each cell's sluggishness (up to 120 ms).
             CHECK (hi - lo > 0.1f && hi - lo < 0.45f, "absorbed lags should spread over a few hundred ms (%.3f)", hi - lo);

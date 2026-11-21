@@ -7,7 +7,7 @@ using spec::FP;
 namespace
 {
     // Header matches audible_spec: 14 px margin, 30 px high, title right-aligned.
-    constexpr int headerTop = 14, headerH = 30, topRowH = 256, bottomH = 190, margin = 12, gap = 10,
+    constexpr int headerTop = 14, headerH = 30, topRowH = 240, bottomH = 190, margin = 12, gap = 10,
                   characterW = 174,          // 10 px from the outer knobs to the border
                   outputW = characterW;
     const char* id (FP p) { return spec::get (p).id; }
@@ -19,10 +19,10 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
 {
     cells.add (ctx, params::id::density, "Density");
     cells.add (ctx, id (FP::Vowel), "Vowel");
-    cells.add (ctx, id (FP::Size), "Size");
+    cells.add (ctx, id (FP::Shift), "Shift");
+    cells.add (ctx, id (FP::Stretch), "Stretch");
     cells.add (ctx, id (FP::Resonance), "Resonance");
     cells.add (ctx, id (FP::Scatter), "Scatter");
-    cells.add (ctx, id (FP::Width), "Width");
 
     character.add (ctx, params::id::character, "Character", true).showStepMarkers();
     character.add (ctx, id (FP::Drive), "Drive");
@@ -34,6 +34,7 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
 
     for (auto* c : std::initializer_list<juce::Component*> { &presetBar, &fieldView, &cells, &character, &flux, &output, &modPanel })
         addAndMakeVisible (c);
+    addAndMakeVisible (aura);   // last: the magnetic field is drawn over the panels
 }
 
 void FluxFilterAudioProcessorEditor::Panel::paint (juce::Graphics& g)
@@ -68,19 +69,24 @@ void FluxFilterAudioProcessorEditor::Panel::resized()
     fieldView.setBounds (top);
     r.removeFromTop (gap);
 
-    // Bottom: LFO 1-3 and the selected knob's modulation, all the same width.
+    // Bottom: LFO 1, LFO 2 and the selected knob's modulation, all the same width.
     auto bottom = r.removeFromBottom (bottomH);
     r.removeFromBottom (gap);
-    const int moduleW = (bottom.getWidth() - 3 * gap) / 4;
+    const int moduleW = (bottom.getWidth() - 2 * gap) / 3;
     for (auto& l : lfos) { l->setBounds (bottom.removeFromLeft (moduleW)); bottom.removeFromLeft (gap); }
     modPanel.setBounds (bottom);
 
-    // Middle: Cells | Flux (takes the rest) | Character.
-    cells.setBounds (r.removeFromLeft ((r.getWidth() - 3 * gap) / 4));   // as wide as one LFO module
+    // Middle: Shape (as wide as an LFO module) | Flux (takes the rest) | Character (as wide as Output).
+    cells.setBounds (r.removeFromLeft (moduleW));
     r.removeFromLeft (gap);
     character.setBounds (r.removeFromRight (characterW));
     r.removeFromRight (gap);
     flux.setBounds (r);
+
+    // The magnetic field around the Flux knob.
+    aura.setBounds (getLocalBounds());
+    const auto ring = flux.getRing().translated ((float) flux.getX(), (float) flux.getY());
+    aura.setRing (ring.getCentre(), ring.getWidth() * 0.5f);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -114,9 +120,9 @@ FluxFilterAudioProcessorEditor::FluxFilterAudioProcessorEditor (FluxFilterAudioP
             p.presets.load (1);
 
             panel.ctx.connect (ModSource::Lfo1, ModTarget::Vowel, 0.2f);
-            panel.ctx.connect (ModSource::Lfo3, ModTarget::Vowel, -0.1f);
+            panel.ctx.connect (ModSource::Lfo2, ModTarget::Stretch, -0.3f);
             panel.ctx.connect (ModSource::Lfo2, ModTarget::Resonance, 0.2f);
-            panel.ctx.connect (ModSource::Lfo3, ModTarget::FluxAmount, 0.3f);
+            panel.ctx.connect (ModSource::Lfo1, ModTarget::FluxAmount, 0.3f);
             panel.ctx.connect (ModSource::Lfo2, ModTarget::Drive, 0.3f);
             panel.ctx.select (spec::get (FP::Vowel).id);
 

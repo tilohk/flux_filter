@@ -351,29 +351,6 @@ namespace icons
                               { 0.2f, 0.4f }, { 0.6f, 0.4f }, { 0.6f, -1 }, { 1, -1 } });
     }
 
-    // Pitch anchor: off (a flat line), scale (steps), follow (a harmonic comb).
-    inline juce::Path anchorOff (juce::Rectangle<float> a) { return polyline (a, { { -0.8f, 0 }, { 0.8f, 0 } }); }
-    inline juce::Path anchorScale (juce::Rectangle<float> a)
-    {
-        return polyline (a, { { -1, -1 }, { -0.5f, -1 }, { -0.5f, -0.33f }, { 0, -0.33f }, { 0, 0.33f }, { 0.5f, 0.33f }, { 0.5f, 1 }, { 1, 1 } });
-    }
-    inline juce::Path anchorFollow (juce::Rectangle<float> a)
-    {
-        juce::Path p;   // harmonics: bars getting shorter
-        const float xs[] = { -0.9f, -0.3f, 0.3f, 0.9f }, hs[] = { 1.0f, 0.5f, 0.0f, -0.4f };
-        for (int i = 0; i < 4; ++i) p.addPath (polyline (a, { { xs[i], -1 }, { xs[i], hs[i] } }));
-        return p;
-    }
-    // Stereo life: linked (two overlapping circles), independent (two apart).
-    inline juce::Path twoCircles (juce::Rectangle<float> a, float apart)
-    {
-        juce::Path p;
-        const float d = a.getHeight(), cx = a.getCentreX(), cy = a.getCentreY(), off = apart * d * 0.5f;
-        p.addEllipse (cx - off - d * 0.5f, cy - d * 0.5f, d, d);
-        p.addEllipse (cx + off - d * 0.5f, cy - d * 0.5f, d, d);
-        return p;
-    }
-
     // Arrow along the x axis from x0 to x1 (in -1..1), head at x1.
     inline void arrow (juce::Path& p, juce::Rectangle<float> a, float x0, float x1)
     {

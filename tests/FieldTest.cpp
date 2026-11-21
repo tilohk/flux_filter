@@ -64,16 +64,16 @@ int main()
                 FluxField f; FieldSettings s;
                 s.density = density; s.resonance = 1.0f; s.driveDb = 24.0f;
                 s.character = (Character) character; s.limiter = limiter;
-                s.feedback = 1.0f; s.damping = 0.0f; s.width = 1.0f;
-                s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 5.0f; s.coupling = 1.0f; s.rasp = 1.0f;
-                s.feed = 0.5f; s.lifespanSec = 0.05f;
+                s.feedback = 1.0f; s.damping = 0.0f;
+                s.fluxAmount = 1.0f; s.wander = 1.0f; s.macroOverride.driftHz = 5.0f; s.macroOverride.coupling = 1.0f; s.rasp = 1.0f;
+                s.macroOverride.feed = 0.5f; s.macroOverride.lifespanSec = 0.05f;
                 f.setSettings (s); f.prepare (sr);
 
                 auto l = noise ((size_t) sr * 2, 1.0f, 1), r = noise ((size_t) sr * 2, 1.0f, 2);
                 for (size_t i = 0; i < l.size(); i += 64)
                 {
                     s.vowel = 9.0f * u (rng);
-                    s.sizeOct = -2.0f + 4.0f * u (rng);
+                    s.shiftOct = 2.0f - 4.0f * u (rng);
                     s.scatter = u (rng);
                     s.resonance = u (rng);
                     f.setSettings (s);
@@ -104,7 +104,7 @@ int main()
 
     // 2. Formant layout: Density sets the formants, each formant's cells sit close around its centre.
     {
-        FieldSettings s; s.density = 9; s.vowel = 0.0f; s.width = 0.0f;
+        FieldSettings s; s.density = 9; s.vowel = 0.0f;
         auto f = settle (s);
         const float table[3] = { 650.0f, 1080.0f, 2650.0f };   // "a": F1..F3
         float worst = 0.0f;
@@ -130,7 +130,7 @@ int main()
         }
 
         // Size: x2 throat = every cell an octave lower.
-        FieldSettings big = s; big.sizeOct = 1.0f;
+        FieldSettings big = s; big.shiftOct = -1.0f;
         auto b = settle (big);
         float sizeErr = 0.0f;
         for (int c = 0; c < 9; ++c) sizeErr = std::max (sizeErr, std::abs (b->getCellFrequency (c) * 2.0f / f->getCellFrequency (c) - 1.0f));
@@ -150,7 +150,7 @@ int main()
     // 3. Scatter: cells leave their formants for free, irregular positions.
     {
         auto range = [&] (float scatter) {
-            FieldSettings s; s.density = 3; s.width = 0.0f; s.scatter = scatter;
+            FieldSettings s; s.density = 3; s.scatter = scatter;
             auto f = settle (s);
             float lo = 1e9f, hi = 0.0f;
             for (int c = 0; c < 3; ++c) { lo = std::min (lo, f->getCellFrequency (c)); hi = std::max (hi, f->getCellFrequency (c)); }
@@ -164,7 +164,7 @@ int main()
 
     // 4. A sine on a formant passes far louder than one between formants.
     {
-        FieldSettings s; s.density = 9; s.vowel = 0.0f; s.width = 0.0f; s.autoGain = false; s.limiter = false; s.fluxAmount = 0.0f;
+        FieldSettings s; s.density = 9; s.vowel = 0.0f; s.autoGain = false; s.limiter = false; s.fluxAmount = 0.0f;
         const float onFormant = settle (s)->getCellFrequency (1);
         auto measure = [&] (float hz) {
             FluxField f; f.setSettings (s); f.prepare (sr);
@@ -194,7 +194,7 @@ int main()
         };
         for (float res : { 0.3f, 0.6f, 0.9f })
         {
-            FieldSettings s; s.resonance = res; s.autoGain = false; s.limiter = false; s.width = 0.0f;
+            FieldSettings s; s.resonance = res; s.autoGain = false; s.limiter = false;
             FluxField f; f.setSettings (s); f.prepare (sr);
             auto v = pink (48000 * 3); const double inRms = rmsTail (v); run (f, v, nullptr);
             const double db = 20.0 * std::log10 (rmsTail (v) / inRms);
@@ -221,7 +221,7 @@ int main()
             return 20.0 * std::log10 (rmsTail (w) / inRms);
         };
         FieldSettings quiet; quiet.limiter = false;
-        FieldSettings loud = quiet; loud.vowel = 6.0f; loud.sizeOct = 1.5f; loud.density = 4;
+        FieldSettings loud = quiet; loud.vowel = 6.0f; loud.shiftOct = -1.5f; loud.density = 4;
         loud.resonance = 0.9f; loud.driveDb = 12.0f; loud.feedback = 0.4f;
         for (auto* d : { &quiet, &loud })
         {
@@ -238,8 +238,8 @@ int main()
     {
         struct Trace { std::vector<float> f1, f3; };
         auto trace = [&] (FieldSettings s, float seconds) {
-            s.width = 0.0f; s.density = 9;
-            s.lifespanSec = 1.0e4f; s.feed = 0.0f;   // drift only: no cell dies in these traces
+            s.density = 9;
+            s.macroOverride.lifespanSec = 1.0e4f; s.macroOverride.feed = 0.0f;   // drift only: no cell dies in these traces
             FluxField f; f.setSettings (s); f.prepare (sr);
             Trace t; std::vector<float> buf (FluxField::controlInterval);
             for (int k = 0; k < (int) (seconds * sr) / FluxField::controlInterval; ++k)
@@ -256,12 +256,12 @@ int main()
 
         for (auto still : { std::pair { 0.0f, 1.0f }, std::pair { 1.0f, 0.0f } })
         {
-            FieldSettings s; s.fluxAmount = still.first; s.wander = still.second; s.driftHz = 3.0f;
+            FieldSettings s; s.fluxAmount = still.first; s.wander = still.second; s.macroOverride.driftHz = 3.0f;
             const auto t = trace (s, 4.0f);
             CHECK (range (t.f1) < 1e-5f, "flux %.0f wander %.0f: cells move (%.5f oct)", still.first, still.second, range (t.f1));
         }
 
-        FieldSettings live; live.fluxAmount = 1.0f; live.wander = 1.0f; live.driftHz = 0.5f;
+        FieldSettings live; live.fluxAmount = 1.0f; live.wander = 1.0f; live.macroOverride.driftHz = 0.5f;
         const auto t = trace (live, 20.0f);
         std::printf ("life: flux 1, wander 1, drift 0.5 Hz: F1 cell roams %.2f oct, F3 cell %.2f oct, largest step %.4f oct/tick\n",
                      range (t.f1), range (t.f3), maxStep (t.f1));
@@ -279,7 +279,7 @@ int main()
         const float rHalf = range (trace (half, 20.0f).f1);
         CHECK (rHalf < range (t.f1) * 0.5f, "wander 0.25 should roam less (%.2f vs %.2f oct)", rHalf, range (t.f1));
 
-        FieldSettings fast = live; fast.driftHz = 4.0f;
+        FieldSettings fast = live; fast.macroOverride.driftHz = 4.0f;
         const double slowPath = travelled (t.f1), fastPath = travelled (trace (fast, 20.0f).f1);
         std::printf ("life: path in 20 s at drift 0.5 Hz %.1f oct, at 4 Hz %.1f oct\n", slowPath, fastPath);
         CHECK (fastPath > slowPath * 3.0, "drift 4 Hz should move much faster (%.1f vs %.1f)", fastPath, slowPath);
@@ -292,8 +292,8 @@ int main()
     //     formant, partly across the border), far cells stay calm; it lets go after the input
     //     stops; it never runs away on its own and barely changes the level.
     {
-        FieldSettings s; s.density = 9; s.fluxAmount = 1.0f; s.wander = 0.0f; s.coupling = 1.0f;
-        s.width = 0.0f; s.autoGain = false; s.limiter = false;
+        FieldSettings s; s.density = 9; s.fluxAmount = 1.0f; s.wander = 0.0f; s.macroOverride.coupling = 1.0f;
+        s.autoGain = false; s.limiter = false;
         const float hz = settle (s)->getCellFrequency (2);   // top cell of F1
         auto excite = [&] (FieldSettings d, float onSec, float offSec) {
             auto f = std::make_unique<FluxField>(); f->setSettings (d); f->prepare (sr);
@@ -318,9 +318,9 @@ int main()
         auto released = excite (s, 1.0f, 5.0f);
         CHECK (released->getCellExcitation (1) < 0.1f, "excitation should let go after the input stops (%.2f)", released->getCellExcitation (1));
 
-        for (auto off : { std::pair { 0.0f, 1.0f }, std::pair { 1.0f, 0.0f } })
+        for (auto off : { std::pair { 0.0f, -1.0f }, std::pair { 1.0f, 0.0f } })   // Flux 0 (the macro's coupling), coupling 0
         {
-            FieldSettings d = s; d.fluxAmount = off.first; d.coupling = off.second;
+            FieldSettings d = s; d.fluxAmount = off.first; d.macroOverride.coupling = off.second;
             auto g = excite (d, 1.0f, 0.0f);
             float most = 0.0f; for (int c = 0; c < 9; ++c) most = std::max (most, g->getCellExcitation (c));
             CHECK (most == 0.0f, "flux %.0f coupling %.0f should not excite (%.3f)", off.first, off.second, most);
@@ -333,7 +333,7 @@ int main()
         CHECK (tail < 1e-6, "full coupling without feedback must not ring on (%.2e)", tail);
 
         auto level = [&] (float coupling) {
-            FieldSettings d = s; d.coupling = coupling; d.resonance = 0.8f;
+            FieldSettings d = s; d.macroOverride.coupling = coupling; d.resonance = 0.8f;
             FluxField h; h.setSettings (d); h.prepare (sr);
             auto w = noise (48000 * 3, 0.3f, 4); const double in = rmsTail (w); run (h, w, nullptr);
             return 20.0 * std::log10 (rmsTail (w) / in);
@@ -360,8 +360,8 @@ int main()
         };
         struct Run { uint32_t births; float meanVitality; double minDb, maxDb, levelDb; };
         auto chance = [&] (float flux, float lifespan) {
-            FieldSettings s; s.density = 12; s.fluxAmount = flux; s.wander = 0.0f; s.coupling = 0.0f; s.feed = 0.0f;
-            s.lifespanSec = lifespan; s.resonance = 0.3f; s.width = 0.0f; s.autoGain = false; s.limiter = false;
+            FieldSettings s; s.density = 12; s.fluxAmount = flux; s.wander = 0.0f; s.macroOverride.coupling = 0.0f; s.macroOverride.feed = 0.0f;
+            s.macroOverride.lifespanSec = lifespan; s.resonance = 0.3f; s.autoGain = false; s.limiter = false;
             FluxField f; f.setSettings (s); f.prepare (sr);
             auto v = pinkNoise (48000 * 10); const double in = rmsTail (v);
             double vit = 0.0; int n = 0;
@@ -390,7 +390,7 @@ int main()
         CHECK (fast.maxDb - fast.minDb < 3.0 && slow.maxDb - slow.minDb < 3.0, "level swings %.1f / %.1f dB", fast.maxDb - fast.minDb, slow.maxDb - slow.minDb);
         // Vitality runs at Flux 0 too, but has no effect: cells never move or fade.
         {
-            FieldSettings a; a.fluxAmount = 0.0f; a.feed = 0.0f; a.lifespanSec = 0.1f; a.width = 0.0f; a.density = 9;
+            FieldSettings a; a.fluxAmount = 0.0f; a.macroOverride.feed = 0.0f; a.macroOverride.lifespanSec = 0.1f; a.density = 9;
             auto f = settle (a);   // settle forces Flux 0
             FluxField g; g.setSettings (a); g.prepare (sr);
             std::vector<float> buf (480, 0.0f);
@@ -403,7 +403,7 @@ int main()
             CHECK (worst < 1e-5f, "flux 0: reborn cells must not move (%.5f oct)", worst);
         }
 
-        FieldSettings e; e.density = 9; e.fluxAmount = 1.0f; e.wander = 0.0f; e.coupling = 0.3f; e.feed = 1.0f; e.lifespanSec = 0.5f; e.width = 0.0f;
+        FieldSettings e; e.density = 9; e.fluxAmount = 1.0f; e.wander = 0.0f; e.macroOverride.coupling = 0.3f; e.macroOverride.feed = 1.0f; e.macroOverride.lifespanSec = 0.5f;
         const float hz = settle (e)->getCellFrequency (1);   // middle of F1
         FluxField f; f.setSettings (e); f.prepare (sr);
         std::vector<float> buf (480);
@@ -439,8 +439,8 @@ int main()
             for (size_t i = a; i < b; ++i) { const double s0 = v[i] + c * s1 - s2; s2 = s1; s1 = s0; }
             return 10.0 * std::log10 ((s1 * s1 + s2 * s2 - c * s1 * s2) / ((double) (b - a) * (double) (b - a)) + 1e-30);
         };
-        FieldSettings base; base.density = 9; base.fluxAmount = 1.0f; base.wander = 0.0f; base.coupling = 0.0f;
-        base.feed = 0.0f; base.lifespanSec = 1.0e4f; base.width = 0.0f; base.autoGain = false; base.limiter = false;
+        FieldSettings base; base.density = 9; base.fluxAmount = 1.0f; base.wander = 0.0f; base.macroOverride.coupling = 0.0f;
+        base.macroOverride.feed = 0.0f; base.macroOverride.lifespanSec = 1.0e4f; base.autoGain = false; base.limiter = false;
         const float hz = settle (base)->getCellFrequency (1);
         auto subOctave = [&] (float flux, float rasp) {
             FieldSettings s = base; s.fluxAmount = flux; s.rasp = rasp;
@@ -479,106 +479,47 @@ int main()
         CHECK (std::abs (l1 - l0) < 2.0, "rasp changes the level by %.1f dB", l1 - l0);
     }
 
-    // 6e. Pitch anchor: notes of a scale, harmonics of the key, harmonics of the input's pitch.
+    // 6e. The stereo image stays as it came in: a mono signal in a stereo track comes out mono
+    //     (bit-identical L/R) with everything alive, and a stereo signal keeps its sides apart.
     {
-        auto cents = [] (float a, float b) { return 1200.0f * std::abs (std::log2 (a / b)); };
-        using namespace anchor;
-        CHECK (cents (std::exp2 (snapToScale (std::log2 (450.0f), 9, AnchorScale::Pentatonic)), 440.0f) < 0.01f, "A pentatonic: 450 Hz → A4");
-        CHECK (cents (std::exp2 (snapToScale (std::log2 (470.0f), 0, AnchorScale::Major)), 493.88f) < 0.1f, "C major: 470 Hz → B4");
-        CHECK (cents (std::exp2 (snapToScale (std::log2 (170.0f), 9, AnchorScale::Harmonic)), 165.0f) < 0.1f, "harmonics of A1: 170 Hz → 165 Hz");
-        CHECK (cents (std::exp2 (snapToHarmonic (std::log2 (330.0f), std::log2 (110.0f))), 330.0f) < 0.01f, "harmonic of 110 Hz");
-
-        // The detector: sine and saw, 55..880 Hz, within 3 cents.
-        float worstDetect = 0.0f;
-        for (float hz : { 55.0f, 110.0f, 220.0f, 440.0f, 880.0f })
-            for (int wave = 0; wave < 2; ++wave)
-            {
-                PitchDetector d; d.prepare ((float) sr); float est = 0.0f;
-                for (int i = 0; i < 24000; ++i)
-                {
-                    const double ph = std::fmod (hz * i / sr, 1.0);
-                    d.push (wave ? (float) (2.0 * ph - 1.0) * 0.3f : 0.3f * (float) std::sin (2.0 * M_PI * ph));
-                    if (i % 960 == 0) est = d.analyse();
-                }
-                worstDetect = std::max (worstDetect, cents (est, hz));
-            }
-        std::printf ("anchor: pitch detector within %.1f cents (55-880 Hz, sine and saw)\n", worstDetect);
-        CHECK (worstDetect < 3.0f, "pitch detector off by %.1f cents", worstDetect);
-
-        auto onNotes = [&] (FieldSettings s, float seconds, const std::vector<float>* input, auto&& noteOf) {
-            FluxField f; f.setSettings (s); f.prepare (sr);
-            std::vector<float> l (480), r (480);
-            long on = 0, all = 0; size_t pos = 0;
-            for (int b = 0; b < (int) (seconds * 100.0f); ++b)
-            {
-                for (size_t i = 0; i < 480; ++i, ++pos) l[i] = r[i] = input != nullptr ? (*input)[pos % input->size()] : 0.0f;
-                f.process (l.data(), r.data(), 480);
-                if (b < 20) continue;   // let it settle
-                for (int ch = 0; ch < 2; ++ch)
-                    for (int c = 0; c < s.density; ++c)
-                    {
-                        const float hz = f.getCellFrequencyNow (c, ch);
-                        on += cents (hz, noteOf (hz, f)) < 5.0f; ++all;
-                    }
-            }
-            return std::pair { 100.0 * (double) on / (double) all, f.getPitchHz() };
-        };
-        FieldSettings sc; sc.density = 12; sc.anchor = AnchorMode::Scale; sc.anchorKey = 9; sc.anchorScale = AnchorScale::Pentatonic;
-        sc.feed = 0.0f; sc.lifespanSec = 1.0e4f;
-        auto scaleNote = [] (float hz, const FluxField&) { return std::exp2 (snapToScale (std::log2 (hz), 9, AnchorScale::Pentatonic)); };
-        FieldSettings still = sc; still.fluxAmount = 0.0f;
-        const double stillOn = onNotes (still, 1.0f, nullptr, scaleNote).first;
-        FieldSettings moving = sc; moving.fluxAmount = 1.0f; moving.wander = 0.5f; moving.driftHz = 0.2f;
-        const double movingOn = onNotes (moving, 5.0f, nullptr, scaleNote).first;
-        std::printf ("anchor: A minor pentatonic, cells on a note (±5 cents): still %.0f %%, drifting %.0f %% of the time\n", stillOn, movingOn);
-        CHECK (stillOn > 99.9, "still cells off the scale (%.1f %% on notes)", stillOn);
-        CHECK (movingOn > 90.0, "drifting cells mostly off the scale (%.1f %% on notes)", movingOn);
-
-        std::vector<float> saw (48000);
-        for (size_t i = 0; i < saw.size(); ++i) saw[i] = 0.3f * (float) (2.0 * std::fmod (110.0 * (double) i / sr, 1.0) - 1.0);
-        FieldSettings fol = still; fol.anchor = AnchorMode::Follow;
-        auto harmonicOf110 = [] (float hz, const FluxField&) { return std::exp2 (snapToHarmonic (std::log2 (hz), std::log2 (110.0f))); };
-        const auto [folOn, detected] = onNotes (fol, 2.0f, &saw, harmonicOf110);
-        std::printf ("anchor: follow a 110 Hz saw: detected %.2f Hz, cells on its harmonics %.0f %% of the time\n", detected, folOn);
-        CHECK (cents (detected, 110.0f) < 3.0f, "follow detected %.2f Hz", detected);
-        CHECK (folOn > 95.0, "follow: cells off the harmonics (%.1f %%)", folOn);
+        FieldSettings s; s.density = 16; s.fluxAmount = 1.0f; s.wander = 1.0f; s.rasp = 1.0f; s.scatter = 0.4f;
+        s.feedback = 0.5f; s.character = Character::Broken;
+        FluxField f; f.setSettings (s); f.prepare (sr);
+        auto l = noise (48000 * 2, 0.3f, 3), r = l;
+        run (f, l, &r);
+        float diff = 0.0f;
+        for (size_t i = 0; i < l.size(); ++i) diff = std::max (diff, std::abs (l[i] - r[i]));
+        std::printf ("stereo: mono in, everything on: largest L/R difference %.2g\n", diff);
+        CHECK (diff == 0.0f, "a mono signal should stay mono (L/R differ by %.3g)", diff);
     }
 
-    // 6f. Stereo life: linked channels share drift, life and rasp; independent ones don't.
+    // 6f. The Flux macro: calm → chaotic on every curve, and it really drives the life processes.
     {
-        auto run2 = [&] (bool independent) {
-            FieldSettings s; s.density = 9; s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 1.0f; s.rasp = 1.0f;
-            s.feed = 0.0f; s.lifespanSec = 0.3f; s.width = 0.0f; s.stereoIndependent = independent;
-            FluxField f; f.setSettings (s); f.prepare (sr);
-            auto l = noise (480, 0.1f, 1), r = l;
-            float freqDiff = 0.0f, vitDiff = 0.0f;
-            for (int b = 0; b < 300; ++b)
-            {
-                auto bl = l, br = r; f.process (bl.data(), br.data(), 480);
-                for (int c = 0; c < 9; ++c)
-                {
-                    freqDiff = std::max (freqDiff, std::abs (std::log2 (f.getCellFrequencyNow (c, 0) / f.getCellFrequencyNow (c, 1))));
-                    vitDiff = std::max (vitDiff, std::abs (f.getCellVitality (c, 0) - (independent ? f.getCellVitality (c, 1) : f.getCellVitality (c, 0))));
-                }
-            }
-            return std::pair { freqDiff, vitDiff };
-        };
-        const auto linked = run2 (false), split = run2 (true);
-        std::printf ("stereo life: L/R cell difference linked %.4f oct, independent %.2f oct; vitality difference independent %.2f\n",
-                     linked.first, split.first, split.second);
-        CHECK (linked.first < 1e-5f, "linked channels should move together (%.4f oct apart)", linked.first);
-        CHECK (split.first > 0.1f && split.second > 0.5f, "independent channels should live apart (%.3f oct, vitality %.2f)", split.first, split.second);
+        const auto calm = FluxMacro::at (0.0f), mid = FluxMacro::at (0.5f), wild = FluxMacro::at (1.0f);
+        std::printf ("flux macro: drift %.2f / %.2f / %.2f Hz, lifespan %.2f / %.2f / %.2f s, coupling %.2f / %.2f / %.2f, feed %.2f / %.2f / %.2f\n",
+                     calm.driftHz, mid.driftHz, wild.driftHz, calm.lifespanSec, mid.lifespanSec, wild.lifespanSec,
+                     calm.coupling, mid.coupling, wild.coupling, calm.feed, mid.feed, wild.feed);
+        CHECK (calm.driftHz < mid.driftHz && mid.driftHz < wild.driftHz, "drift should speed up with Flux");
+        CHECK (calm.lifespanSec > mid.lifespanSec && mid.lifespanSec > wild.lifespanSec, "lives should shorten with Flux");
+        CHECK (calm.coupling == 0.0f && wild.coupling == 1.0f && mid.coupling > 0.0f, "coupling should rise from 0 to 1");
+        CHECK (calm.feed > wild.feed, "high Flux should lean more on chance");
 
-        FieldSettings mono; mono.stereoIndependent = true; mono.fluxAmount = 1.0f;
-        FluxField m; m.setSettings (mono); m.prepare (sr);
-        auto v = noise (48000, 0.3f); const auto res = run (m, v, nullptr);
-        CHECK (res.finite, "independent stereo life in mono");
+        // Births in 4 s of noise: none when calm, many when wild.
+        auto births = [&] (float flux) {
+            FieldSettings d; d.density = 12; d.fluxAmount = flux;
+            FluxField g; g.setSettings (d); g.prepare (sr);
+            auto v = noise (48000 * 4, 0.3f, 9); run (g, v, nullptr);
+            return g.getBirths();
+        };
+        const auto b0 = births (0.0f), b5 = births (0.5f), b1 = births (1.0f);
+        std::printf ("flux macro: births in 4 s of noise: %u at Flux 0, %u at 0.5, %u at 1\n", b0, b5, b1);
+        CHECK (b0 <= b5 && b5 < b1 && b1 > 20, "births should grow with Flux (%u, %u, %u)", b0, b5, b1);
     }
 
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,
     //    and auto gain does not pump the tail up.
     {
-        FieldSettings s; s.feedback = 1.0f; s.damping = 0.0f; s.resonance = 0.9f; s.vowel = 7.0f; s.sizeOct = 1.0f;
+        FieldSettings s; s.feedback = 1.0f; s.damping = 0.0f; s.resonance = 0.9f; s.vowel = 7.0f; s.shiftOct = -1.0f;
         FluxField f; f.setSettings (s); f.prepare (sr);
         auto v = noise (48000, 0.3f);                      // 1 s of input...
         v.resize (48000 * 4, 0.0f);                        // ...then 3 s of silence

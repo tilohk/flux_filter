@@ -18,10 +18,6 @@ namespace flux::params
         inline constexpr auto character = "character";
         inline constexpr auto autoGain  = "autoGain";
         inline constexpr auto limiter   = "limiter";
-        inline constexpr auto anchor     = "anchor";
-        inline constexpr auto anchorKey  = "anchorKey";
-        inline constexpr auto anchorScale = "anchorScale";
-        inline constexpr auto stereoLife = "stereoLife";
 
         inline juce::String lfo (int i, const char* what)  { return "lfo" + juce::String (i + 1) + what; }   // Sync, Division, Shape, Unipolar, Flux
         inline juce::String slot (int i, const char* what) { return "slot" + juce::String (i + 1) + what; }  // Source, Target, Depth
@@ -116,21 +112,13 @@ namespace flux::params
                 return jlimit (0.0f, (float) formants::numShapes, name.getFloatValue());
             });
 
-        // Size: how big the throat is, as a factor (x2 = twice as big = formants an octave lower).
-        auto sizeText = AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float oct, int) { return "x" + String (std::exp2 (oct), 2); })
-            .withValueFromStringFunction ([] (const String& t) {
-                const float f = t.trim().trimCharactersAtStart ("xX*").getFloatValue();
-                return f > 0.0f ? jlimit (-2.0f, 2.0f, std::log2 (f)) : 0.0f;
-            });
-
-        auto field = std::make_unique<AudioProcessorParameterGroup> ("cells", "Cells", "|",
+        auto field = std::make_unique<AudioProcessorParameterGroup> ("shape", "Shape", "|",
             std::make_unique<AudioParameterInt> (ParameterID { id::density, v }, "Density", 1, 16, 8),
             floatParam (FP::Vowel, vowelText),
-            floatParam (FP::Size, sizeText),
+            floatParam (FP::Shift),
+            floatParam (FP::Stretch),
             floatParam (FP::Resonance),
-            floatParam (FP::Scatter),
-            floatParam (FP::Width));
+            floatParam (FP::Scatter));
 
         auto character = std::make_unique<AudioProcessorParameterGroup> ("character", "Character", "|",
             choice (id::character, "Character", { "Clean", "Warm", "Broken" }, 1),
@@ -139,16 +127,8 @@ namespace flux::params
             floatParam (FP::Drive));
 
         auto fluxGroup = std::make_unique<AudioProcessorParameterGroup> ("flux", "Flux", "|",
-            floatParam (FP::Drift),
-            choice (id::anchor, "Pitch Anchor", { "Off", "Scale", "Follow" }, 0),
-            choice (id::anchorKey, "Key", names (anchor::keyNames), 0),
-            choice (id::anchorScale, "Scale", names (anchor::scaleNames), 1),
             floatParam (FP::FluxAmount),
             floatParam (FP::Wander),
-            choice (id::stereoLife, "Stereo Life", { "Linked", "Independent" }, 0),
-            floatParam (FP::Coupling),
-            floatParam (FP::Feed),
-            floatParam (FP::Lifespan),
             floatParam (FP::Rasp));
 
         auto output = std::make_unique<AudioProcessorParameterGroup> ("output", "Output", "|",
@@ -161,11 +141,11 @@ namespace flux::params
         layout.add (std::move (field), std::move (character), std::move (fluxGroup), std::move (output));
 
         // --- Mod sources ---
-        const FP lfoRate[] = { FP::Lfo1Rate, FP::Lfo2Rate, FP::Lfo3Rate };
-        const FP lfoFlux[] = { FP::Lfo1Flux, FP::Lfo2Flux, FP::Lfo3Flux };
+        const FP lfoRate[] = { FP::Lfo1Rate, FP::Lfo2Rate };
+        const FP lfoFlux[] = { FP::Lfo1Flux, FP::Lfo2Flux };
         StringArray divisions;
         for (const auto& d : lfoDivisions) divisions.add (d.name);
-        const int defaultShapes[] = { 0, 1, 0 };   // Sine, Triangle, Sine
+        const int defaultShapes[] = { 0, 1 };   // Sine, Triangle
         for (int i = 0; i < ModSettings::numLfos; ++i)
         {
             const String n = "LFO " + String (i + 1);

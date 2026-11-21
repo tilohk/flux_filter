@@ -8,12 +8,11 @@
 namespace flux::ui
 {
 
-// Live picture of the field: every cell as a resonance peak at its current frequency.
-// Peak width follows the cell's Q, height its level (formant level, excitation, life), so births
-// and deaths are visible. Left channel sage, right clay rose; the cells of one formant share a
-// slight tint, so the formants read as humps. An excited cell (fed by its neighbours) glows.
-// A faint marker under each formant shows where it is headed (fades as the cells scatter).
-// Behind the cells: the spectrum of the filtered output (grey).
+// Live picture of the field: one line, the filter's combined response, which is what the input
+// actually goes through: every living cell summed (with their phases), the feedback loop, the
+// makeup / auto gain and the dry/wet mix. As cells drift, are born and die, the line breathes.
+// Where cells are excited by their neighbours (coupling), the line glows in the flux colour.
+// Behind it: the spectrum of the filtered output (grey).
 class FieldView : public juce::Component, private juce::Timer
 {
 public:
@@ -34,56 +33,130 @@ public:
         const auto plot = r.reduced (12.0f, 10.0f).withTrimmedBottom (14.0f);
         drawGrid (g, plot);
         drawSpectrum (g, plot);
-
-        const auto& snap = processor.getFieldSnapshot();
-        const int cells = juce::jlimit (0, FluxField::maxCells, snap.activeCells.load (std::memory_order_relaxed));
-        const juce::Colour chColour[2] = { colours::channelL, colours::channelR };
-
-        for (int ch = 1; ch >= 0; --ch)   // right first, left on top
-            for (int c = 0; c < cells; ++c)
-            {
-                const float f = snap.freq[(size_t) ch][(size_t) c].load (std::memory_order_relaxed);
-                const float q = snap.q[(size_t) ch][(size_t) c].load (std::memory_order_relaxed);
-                const float level = snap.level[(size_t) ch][(size_t) c].load (std::memory_order_relaxed);
-                if (f <= 0.0f || level <= 0.001f)
-                    continue;
-                const int k = juce::jlimit (0, formants::numFormants - 1, snap.formant[(size_t) c].load (std::memory_order_relaxed));
-                const float glow = snap.glow[(size_t) c].load (std::memory_order_relaxed);
-                drawPeak (g, plot, f, q, level, chColour[ch].interpolatedWith (formantTint[k], 0.3f), glow);
-            }
-        drawFormantTargets (g, plot, snap);   // on top, so small formants don't hide their label
-
-        g.setColour (colours::dim);
-        g.setFont (juce::FontOptions (11.0f));
-        g.drawText (juce::String (cells) + " cells", r.reduced (12.0f, 6.0f).toNearestInt(), juce::Justification::topRight);
+        drawResponse (g, plot);
     }
 
 private:
     static constexpr float minHz = 20.0f, maxHz = 20000.0f;
+    static constexpr float topDb = 15.0f, bottomDb = -45.0f;   // response scale; 0 dB at 75 % of the height
 
-    // A slight tint per formant (F1…F5), mixed into the channel colour.
-    inline static const juce::Colour formantTint[formants::numFormants] = {
-        juce::Colour (0xffd8cec2), juce::Colour (0xffe0b878), juce::Colour (0xffc9a0c8), juce::Colour (0xff8fb5c9), juce::Colour (0xffb8c98f) };
-
-    // A short tick and "F1"… at the bottom of the plot under each formant's target.
-    static void drawFormantTargets (juce::Graphics& g, const juce::Rectangle<float>& plot, const FluxField::Snapshot& snap)
+    static float yForDb (const juce::Rectangle<float>& plot, float db)
     {
-        const float alpha = 0.55f * (1.0f - snap.scatter.load (std::memory_order_relaxed));
-        if (alpha < 0.02f) return;
-        const int n = juce::jlimit (1, formants::numFormants, snap.numFormants.load (std::memory_order_relaxed));
-        g.setFont (juce::FontOptions (9.0f));
-        for (int k = 0; k < n; ++k)
+        return plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, (db - bottomDb) / (topDb - bottomDb));
+    }
+
+    // Recomputed every frame from the snapshot (both channels are identical).
+    void updateResponse()
+    {
+        const auto& snap = processor.getFieldSnapshot();
+        constexpr auto relaxed = std::memory_order_relaxed;
+        const int cells = juce::jlimit (0, FluxField::maxCells, snap.activeCells.load (relaxed));
+        std::array<float, FluxField::maxCells> freq {}, q {}, level {}, glow {};
+        for (int c = 0; c < cells; ++c)
         {
-            const float hz = snap.target[(size_t) k].load (std::memory_order_relaxed);
-            if (hz < minHz || hz > maxHz) continue;
-            const float x = xFor (plot, hz);
-            const juce::Rectangle<float> label (x - 9.0f, plot.getBottom() - 20.0f, 18.0f, 11.0f);
-            g.setColour (colours::viewport.withAlpha (0.7f * alpha / 0.55f));
-            g.fillRoundedRectangle (label, 3.0f);
-            g.setColour (formantTint[k].withAlpha (alpha));
-            g.drawLine (x, plot.getBottom() - 8.0f, x, plot.getBottom(), 1.0f);
-            g.drawText ("F" + juce::String (k + 1), label, juce::Justification::centred);
+            freq[(size_t) c] = juce::jmax (1.0f, snap.freq[(size_t) c].load (relaxed));
+            q[(size_t) c] = juce::jmax (0.1f, snap.q[(size_t) c].load (relaxed));
+            level[(size_t) c] = snap.level[(size_t) c].load (relaxed);
+            glow[(size_t) c] = juce::jlimit (0.0f, 1.0f, snap.glow[(size_t) c].load (relaxed));
         }
+        const float norm = snap.norm.load (relaxed), post = snap.post.load (relaxed);
+        const float fb = snap.feedback.load (relaxed), mix = snap.mix.load (relaxed);
+        const float sr = processor.getSampleRateForUi();
+        const float dampCoef = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * snap.dampHz.load (relaxed) / sr);
+        hasResponse = cells > 0;
+
+        std::array<float, curvePoints> rawPower {}, rawGlow {};
+        for (int i = 0; i < curvePoints; ++i)
+        {
+            const float hz = curveHz[(size_t) i];
+            const auto h = norm * FluxField::response (hz, cells, freq.data(), q.data(), [&] (int c) { return level[(size_t) c]; });
+            // Feedback: the wet signal goes back in through the damping lowpass (one pole):
+            // wet = H x / (1 - fb D H). Near self-oscillation the saturation holds it; cap the display at +20 dB.
+            std::complex<float> wet = h;
+            if (fb > 0.0f && hz < 0.5f * sr)
+            {
+                const auto z1 = std::polar (1.0f, -juce::MathConstants<float>::twoPi * hz / sr);
+                const auto damp = dampCoef / (1.0f - (1.0f - dampCoef) * z1);
+                auto denom = 1.0f - fb * damp * h;
+                if (std::abs (denom) < 0.1f) denom *= 0.1f / std::abs (denom);
+                wet = h / denom;
+            }
+            const auto total = (1.0f - mix) + mix * post * wet;
+            rawPower[(size_t) i] = std::norm (total);
+
+            // Glow: the share of this point that comes from excited cells.
+            float excited = 0.0f, all = 1.0e-9f;
+            for (int c = 0; c < cells; ++c)
+            {
+                const float m = level[(size_t) c] * FluxCell::magnitude (hz / freq[(size_t) c], q[(size_t) c], 1.0f);
+                excited += m * glow[(size_t) c];
+                all += m;
+            }
+            rawGlow[(size_t) i] = mix * excited / all;
+        }
+
+        // Round the tips: average the power over about 1/5 octave (a small bell), so narrow
+        // resonances read as soft hills rather than needles. Then ease over time.
+        constexpr int half = 4;
+        constexpr float bell[2 * half + 1] = { 0.03f, 0.08f, 0.15f, 0.2f, 0.24f, 0.2f, 0.15f, 0.08f, 0.03f };
+        for (int i = 0; i < curvePoints; ++i)
+        {
+            float p = 0.0f, gl = 0.0f, w = 0.0f;
+            for (int k = -half; k <= half; ++k)
+            {
+                const int j = juce::jlimit (0, curvePoints - 1, i + k);
+                p += bell[k + half] * rawPower[(size_t) j];
+                gl += bell[k + half] * rawGlow[(size_t) j];
+                w += bell[k + half];
+            }
+            const float db = 10.0f * std::log10 (p / w + 1.0e-12f);
+            auto& d = responseDb[(size_t) i];
+            d += (db - d) * 0.6f;   // a touch of easing so the 30 Hz frames don't flicker
+            responseGlow[(size_t) i] = gl / w;
+        }
+    }
+
+    void drawResponse (juce::Graphics& g, const juce::Rectangle<float>& plot)
+    {
+        // 0 dB reference.
+        g.setColour (colours::viewportGrid.withAlpha (0.7f));
+        const float zeroY = yForDb (plot, 0.0f);
+        const float dashes[] = { 3.0f, 4.0f };
+        g.drawDashedLine ({ plot.getX(), zeroY, plot.getRight(), zeroY }, dashes, 2, 1.0f);
+        if (! hasResponse) return;
+
+        juce::Path line;
+        std::array<juce::Point<float>, curvePoints> pts;
+        for (int i = 0; i < curvePoints; ++i)
+        {
+            pts[(size_t) i] = { xFor (plot, curveHz[(size_t) i]), yForDb (plot, responseDb[(size_t) i]) };
+            if (i == 0) line.startNewSubPath (pts[0]);
+            else        line.quadraticTo (pts[(size_t) i - 1], (pts[(size_t) i - 1] + pts[(size_t) i]) * 0.5f);   // midpoint smoothing
+        }
+        line.lineTo (pts.back());
+
+        juce::Path fill (line);
+        fill.lineTo (plot.getRight(), plot.getBottom());
+        fill.lineTo (plot.getX(), plot.getBottom());
+        fill.closeSubPath();
+
+        const auto colour = colours::channelL;
+        const float top = yForDb (plot, topDb);
+        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.30f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
+        g.fillPath (fill);
+
+        // Glow where cells are excited: a soft, wide flux-coloured stroke, segment by segment.
+        for (int i = 1; i < curvePoints; ++i)
+        {
+            const float glow = 0.5f * (responseGlow[(size_t) i - 1] + responseGlow[(size_t) i]);
+            if (glow < 0.03f) continue;
+            const juce::Line<float> seg (pts[(size_t) i - 1], pts[(size_t) i]);
+            g.setColour (colours::flux.withAlpha (juce::jmin (0.6f, 0.9f * glow)));
+            g.drawLine (seg, 5.0f);
+        }
+
+        g.setColour (colour.withAlpha (0.95f));
+        g.strokePath (line, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
     static float xFor (const juce::Rectangle<float>& plot, float hz)
@@ -108,53 +181,6 @@ private:
                 g.drawText (txt, juce::Rectangle<float> (x - 20.0f, plot.getBottom() + 1.0f, 40.0f, 12.0f), juce::Justification::centred);
             }
         }
-    }
-
-    // A cell as a resonance peak that fades into the background: the curve reaches exactly zero at
-    // its edges (no steps at the bottom), the fill is a gradient to transparent, only the top is stroked.
-    static void drawPeak (juce::Graphics& g, const juce::Rectangle<float>& plot, float hz, float q, float level, juce::Colour colour, float glow)
-    {
-        // Width in octaves: a resonance's -3 dB bandwidth is about 1.44/Q octaves; widened a bit to stay visible.
-        const float bwOct = juce::jlimit (0.025f, 2.0f, 1.2f / juce::jmax (q, 0.1f));
-        const float height = juce::jlimit (0.0f, 1.0f, level / 1.35f) * plot.getHeight() * 0.8f;   // ~2/3 of the height at unity
-        const float centreOct = std::log2 (hz);
-        constexpr float reach = 6.0f;                           // half-width in bandwidths
-        constexpr float tail = 1.0f / (1.0f + reach * reach);   // subtracted so the edges land on zero
-
-        juce::Path curve;
-        constexpr int steps = 48;
-        bool started = false;
-        float firstX = 0.0f, lastX = 0.0f;
-        for (int i = 0; i <= steps; ++i)
-        {
-            const float o = centreOct + bwOct * reach * ((float) i / (float) steps * 2.0f - 1.0f);
-            const float hzAt = std::exp2 (o);
-            if (hzAt < minHz || hzAt > maxHz) continue;
-            const float d = (o - centreOct) / bwOct;
-            const float shape = juce::jmax (0.0f, (1.0f / (1.0f + d * d) - tail) / (1.0f - tail));
-            const juce::Point<float> pt (xFor (plot, hzAt), plot.getBottom() - height * shape);
-            if (! started) { curve.startNewSubPath (pt); firstX = pt.x; started = true; }
-            else           curve.lineTo (pt);
-            lastX = pt.x;
-        }
-        if (! started) return;
-
-        juce::Path fill (curve);
-        fill.lineTo (lastX, plot.getBottom());
-        fill.lineTo (firstX, plot.getBottom());
-        fill.closeSubPath();
-
-        const float top = plot.getBottom() - height;
-        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.35f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
-        g.fillPath (fill);
-        if (glow > 0.02f)   // fed by its neighbours: a soft flux-coloured halo along the top
-        {
-            g.setGradientFill (juce::ColourGradient (colours::flux.withAlpha (0.45f * glow), 0.0f, top,
-                                                     colours::flux.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
-            g.strokePath (curve, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.95f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
-        g.strokePath (curve, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
     // Output spectrum: 1/6-octave smoothed, tilted +3 dB/oct around 1 kHz (so typical music reads
@@ -255,6 +281,7 @@ private:
     void timerCallback() override
     {
         updateSpectrum();
+        updateResponse();
         repaint();
     }
 
@@ -271,8 +298,16 @@ private:
         return a;
     }();
     std::array<float, numPoints> smoothDb = [] { std::array<float, numPoints> a {}; a.fill (-120.0f); return a; }();
+    static constexpr int curvePoints = 400;   // ~40 per octave
+    std::array<float, curvePoints> curveHz = [] {
+        std::array<float, curvePoints> a {};
+        for (int i = 0; i < curvePoints; ++i) a[(size_t) i] = minHz * std::pow (maxHz / minHz, (float) i / (float) (curvePoints - 1));
+        return a;
+    }();
+    std::array<float, curvePoints> responseDb = [] { std::array<float, curvePoints> a {}; a.fill (bottomDb); return a; }();
+    std::array<float, curvePoints> responseGlow {};
     int writePos = 0;
-    bool hasSignal = false;
+    bool hasSignal = false, hasResponse = false;
 
     FluxFilterAudioProcessor& processor;
 };

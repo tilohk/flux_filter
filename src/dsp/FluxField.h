@@ -3,7 +3,6 @@
 #include "FluxCell.h"
 #include "FluxChaos.h"
 #include "FormantTable.h"
-#include "PitchAnchor.h"
 #include "mod/ModMatrix.h"
 
 #include <array>
@@ -22,10 +21,10 @@ struct FieldSettings
 {
     int   density    = 8;       // number of active cells, 1..maxCells; also sets the number of formants
     float vowel      = 0.0f;    // ring position 0..9 through the throat shapes (dsp/FormantTable.h)
-    float sizeOct    = 0.0f;    // throat size, -2..+2 octaves: + = bigger throat = lower formants
+    float shiftOct   = 0.0f;    // moves every formant, -2..+2 octaves: + = higher
+    float stretch    = 0.0f;    // formant spacing, -1..1: - = squeezed towards F1, + = pushed apart
     float resonance  = 0.6f;    // 0..1, scales the formant bandwidths (0.6 = the table's bandwidths)
     float scatter    = 0.0f;    // 0 = cells sit on their formants, 1 = free, irregular positions
-    float width      = 0.5f;    // stereo: L/R cutoff offset + alternating pan
 
     // Organic layer
     Character character = Character::Warm;
@@ -34,20 +33,14 @@ struct FieldSettings
     bool  autoGain   = true;    // turn the wet signal down when it gets louder than the input (never up)
     bool  limiter    = true;    // soft safety ceiling at 0 dBFS
 
-    // Flux: how alive the field is. Life so far: chaotic drift of the throat (phase 2).
-    float fluxAmount = 0.25f;   // 0 = a still formant filter; scales every life process
-    float driftHz    = 0.2f;    // speed of the chaos
-    float wander     = 0.5f;    // how far it roams (times Flux)
-    float coupling   = 0.3f;    // how much ringing cells feed their neighbours (times Flux)
-    float feed       = 0.5f;    // life cycle driver: 0 = chance, 1 = input energy
-    float lifespanSec = 2.0f;   // mean life of a cell (chance) / how long it survives starving (energy)
+    // Flux: how alive the field is, calm (0) to chaotic (1). It drives every life process through
+    // the macro (see FluxMacro): drift speed, lifespan, coupling and what feeds the life cycle.
+    float fluxAmount = 0.25f;   // 0 = a still formant filter
+    float wander     = 0.5f;    // how far the drift roams (times Flux)
     float rasp       = 0.0f;    // throat roughness: jitter + sub-octave growl (times Flux); 0 = clean
-    bool  stereoIndependent = false;   // each channel has its own chaos, population and rasp
 
-    // Pitch anchor: cells snap to notes of a key/scale or to harmonics of the input's pitch.
-    AnchorMode  anchor = AnchorMode::Off;
-    int         anchorKey = 0;          // 0 = C … 11 = B
-    AnchorScale anchorScale = AnchorScale::Major;
+    // Tests only: a value >= 0 replaces what the Flux macro would set.
+    struct MacroOverride { float driftHz = -1.0f, lifespanSec = -1.0f, coupling = -1.0f, feed = -1.0f; } macroOverride;
 
     float driveDb    = 0.0f;    // input saturation
     float mix        = 1.0f;    // dry/wet
@@ -67,10 +60,30 @@ struct FastRandom
     float nextGaussianish() noexcept { return (nextBipolar() + nextBipolar() + nextBipolar()) * 1.0f; } // σ ≈ 1
 };
 
+// The Flux macro: one knob from calm to chaotic. Every life process follows it on its own curve.
+//   Flux 0:  a still filter. Slow drift (0.05 Hz), long lives (12 s), no coupling, the life cycle
+//            driven mostly by the input's energy (cells live where the sound is).
+//   Flux 1:  fast drift (2.5 Hz), short lives (0.25 s), full coupling, more chance (cells flicker
+//            in and out on their own).
+// Life depth (how far dead cells fade) is Flux itself; Wander and Rasp are scaled by Flux too.
+struct FluxMacro
+{
+    float driftHz, lifespanSec, coupling, feed;
+
+    static FluxMacro at (float flux) noexcept
+    {
+        const float f = std::clamp (flux, 0.0f, 1.0f);
+        return { 0.05f * std::pow (50.0f, f),                  // 0.05 → 2.5 Hz, exponential
+                 12.0f * std::pow (0.25f / 12.0f, f),          // 12 s → 0.25 s, exponential
+                 f * std::sqrt (f),                            // 0 → 1, gentle at first
+                 0.8f - 0.5f * f };                            // energy-fed → more chance
+    }
+};
+
 // A field of resonant cells grouped into formants: a throat that shapes any input into vowels.
 // The cells are divided among 1–5 formants (by Density). The cells of one formant are slightly
 // detuned around its centre, so a formant is a broad, uneven hump rather than one sharp peak.
-// Vowel, Size and Resonance pick the formants from the throat table; Scatter pulls the cells away
+// Vowel, Shift and Resonance pick the formants from the throat table; Scatter pulls the cells away
 // from them to free, irregular positions. Coefficients are recomputed at control rate (every
 // controlInterval samples) from smoothed settings and the modulation.
 class FluxField
@@ -80,17 +93,18 @@ public:
     static constexpr int maxChannels = 2;
     static constexpr int controlInterval = 32;
     static constexpr float wetCeiling = 4.0f, invWetCeiling = 1.0f / wetCeiling;
-    using Matrix = ModMatrix<maxCells, maxChannels>;
+    using Matrix = ModMatrix<maxCells>;
 
     // What the UI shows: written by the audio thread every control tick, read by the UI at any time.
+    // Enough to draw the field's combined response: every cell (both channels are identical) plus
+    // the gain after it, the feedback loop and the mix.
     struct Snapshot
     {
-        std::atomic<int> activeCells { 0 }, numFormants { 1 };
-        std::array<std::array<std::atomic<float>, maxCells>, maxChannels> freq {}, q {}, level {};
-        std::array<std::atomic<int>, maxCells> formant {};        // which formant each cell belongs to
+        std::atomic<int> activeCells { 0 };
+        std::array<std::atomic<float>, maxCells> freq {}, q {}, level {};   // level: gain × life, before the norm
         std::array<std::atomic<float>, maxCells> glow {};         // excitation from its neighbours, 0..1
-        std::array<std::atomic<float>, formants::numFormants> target {};   // each formant's centre (Hz), left channel
-        std::atomic<float> scatter { 0.0f };
+        std::atomic<float> norm { 1.0f }, post { 1.0f };          // inside the feedback loop / after it (makeup × auto gain)
+        std::atomic<float> feedback { 0.0f }, dampHz { 20000.0f }, mix { 1.0f };
     };
 
     void prepare (double newSampleRate) noexcept
@@ -110,13 +124,9 @@ public:
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         mod.prepare (sampleRate, ticksPerSecond);
-        for (uint32_t p = 0; p < maxChannels; ++p) chaos[p].reset (p);
-        pitch.prepare (sampleRate);
-        pitchTicks = std::max (1, (int) std::lround (0.02f * ticksPerSecond));   // analyse every ~20 ms
-        anchorGlide = tickCoef (0.008f);
-        anchorActive = false;
+        chaos.reset();
         agGain = 1.0f;
-        for (auto& ch : levelMod) ch.fill (1.0f);
+        levelMod.fill (1.0f);
         reset();
         firstTick = true;
         makeupCounter = 0;
@@ -143,7 +153,6 @@ public:
     void process (float* left, float* right, int numSamples) noexcept
     {
         const int numCh = right != nullptr ? 2 : 1;
-        stereo = numCh == 2;
         float* chans[2] = { left, right };
         blockPeakPre.fill (0.0f);
         blockPeakPost.fill (0.0f);
@@ -156,9 +165,6 @@ public:
                 samplesUntilTick = controlInterval;
             }
             --samplesUntilTick;
-
-            if (cur.anchor == AnchorMode::Follow)   // the detector only listens in Follow mode
-                pitch.push (numCh == 2 ? 0.5f * (left[i] + right[i]) : left[i]);
 
             float inSq = 0.0f, wetSq = 0.0f;
             float wetCh[2] = { 0.0f, 0.0f };
@@ -201,16 +207,15 @@ public:
     }
 
     // For tests / future visualiser (audio thread only).
-    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before modulation and width
-    float getCellFrequencyNow (int i, int ch = 0) const noexcept { return cellFreqNow[(size_t) ch][(size_t) i]; }
-    float getCellQ (int i, int ch = 0) const noexcept { return cellQ[(size_t) ch][(size_t) i]; }
+    float getCellFrequency (int i) const noexcept { return cellFreq[(size_t) i]; }       // before modulation
+    float getCellFrequencyNow (int i) const noexcept { return cellFreqNow[(size_t) i]; }
+    float getCellQ (int i) const noexcept { return cellQ[(size_t) i]; }
     float getCellGain (int i) const noexcept { return cellGain[(size_t) i]; }
     int   getCellFormant (int i) const noexcept { return formantOf[(size_t) i]; }
     int   getActiveCells() const noexcept { return activeCells; }
     float getCellExcitation (int i) const noexcept { return excitation[(size_t) i]; }
-    float getCellVitality (int i, int ch = 0) const noexcept { return life[(size_t) ch][(size_t) i].vitality; }
-    bool  isCellAlive (int i, int ch = 0) const noexcept { return life[(size_t) ch][(size_t) i].alive; }
-    float getPitchHz() const noexcept { return pitch.getPitch(); }
+    float getCellVitality (int i) const noexcept { return life[(size_t) i].vitality; }
+    bool  isCellAlive (int i) const noexcept { return life[(size_t) i].alive; }
     uint32_t getBirths() const noexcept { return births; }
     float getMakeupDb() const noexcept { return 20.0f * std::log10 (makeup); }
     float getAutoGain() const noexcept { return agGain; }
@@ -289,7 +294,7 @@ private:
             before = prev[ci];
             prev[ci] = y;
             acc[ci] += y * y;
-            sum += heard * cellGain[ci] * levelMod[(size_t) ch][ci] * (stereo ? pan[(size_t) ch][ci] : 1.0f);
+            sum += heard * cellGain[ci] * levelMod[ci];
         }
         return sum * fieldNorm;
     }
@@ -304,22 +309,15 @@ private:
         }
         auto glide = [this] (float& v, float t) { v += (t - v) * smoothCoef; };
         glide (cur.vowel, target.vowel);
-        glide (cur.sizeOct, target.sizeOct);
+        glide (cur.shiftOct, target.shiftOct);
+        glide (cur.stretch, target.stretch);
         glide (cur.resonance, target.resonance);
         glide (cur.scatter, target.scatter);
-        glide (cur.width, target.width);
         glide (cur.feedback, target.feedback);
         glide (cur.damping, target.damping);
         glide (cur.fluxAmount, target.fluxAmount);
         glide (cur.wander, target.wander);
-        glide (cur.feed, target.feed);
-        cur.lifespanSec = target.lifespanSec;
-        cur.stereoIndependent = target.stereoIndependent;
-        cur.anchor = target.anchor;
-        cur.anchorKey = target.anchorKey;
-        cur.anchorScale = target.anchorScale;
-        glide (cur.coupling, target.coupling);
-        cur.driftHz = target.driftHz;
+        cur.macroOverride = target.macroOverride;
         glide (cur.rasp, target.rasp);
         glide (cur.driveDb, target.driveDb);
         glide (cur.mix, target.mix);
@@ -351,24 +349,20 @@ private:
     void publishSnapshot() noexcept
     {
         constexpr auto relaxed = std::memory_order_relaxed;
-        snapshot.activeCells.store (activeCells, relaxed);
-        for (int ch = 0; ch < maxChannels; ++ch)
-            for (int c = 0; c < activeCells; ++c)
-            {
-                const auto cc = (size_t) ch, ci = (size_t) c;
-                snapshot.freq[cc][ci].store (cellFreqNow[cc][ci], relaxed);
-                snapshot.q[cc][ci].store (cellQ[cc][ci], relaxed);
-                snapshot.level[cc][ci].store (cellGain[ci] * levelMod[cc][ci], relaxed);
-            }
-        snapshot.numFormants.store (numFormants, relaxed);
         for (int c = 0; c < activeCells; ++c)
         {
-            snapshot.formant[(size_t) c].store (formantOf[(size_t) c], relaxed);
-            snapshot.glow[(size_t) c].store (excitation[(size_t) c], relaxed);
+            const auto ci = (size_t) c;
+            snapshot.freq[ci].store (cellFreqNow[ci], relaxed);
+            snapshot.q[ci].store (cellQ[ci], relaxed);
+            snapshot.level[ci].store (cellGain[ci] * levelMod[ci], relaxed);
+            snapshot.glow[ci].store (excitation[ci], relaxed);
         }
-        for (int k = 0; k < numFormants; ++k)
-            snapshot.target[(size_t) k].store (formantTargetHz[(size_t) k], relaxed);
-        snapshot.scatter.store (std::clamp (cur.scatter, 0.0f, 1.0f), relaxed);
+        snapshot.activeCells.store (activeCells, relaxed);
+        snapshot.norm.store (fieldNorm, relaxed);
+        snapshot.post.store (makeup * agGain, relaxed);
+        snapshot.feedback.store (fbGain, relaxed);
+        snapshot.dampHz.store (dampHz, relaxed);
+        snapshot.mix.store (effMix, relaxed);
     }
 
     // Global parameters after modulation (natural units).
@@ -377,16 +371,12 @@ private:
         using spec::FP;
         auto m = [this] (FP p, float base, ModTarget t) { return Matrix::modulated (p, base, mod.global (t)); };
         FieldSettings e = cur;
-        e.sizeOct   = m (FP::Size, cur.sizeOct, ModTarget::Size);
-        e.width     = m (FP::Width, cur.width, ModTarget::Width);
+        e.shiftOct  = m (FP::Shift, cur.shiftOct, ModTarget::Shift);
+        e.stretch   = m (FP::Stretch, cur.stretch, ModTarget::Stretch);
         e.feedback  = m (FP::Feedback, cur.feedback, ModTarget::Feedback);
         e.damping   = m (FP::Damping, cur.damping, ModTarget::Damping);
         e.fluxAmount = m (FP::FluxAmount, cur.fluxAmount, ModTarget::FluxAmount);
-        e.driftHz   = m (FP::Drift, cur.driftHz, ModTarget::Drift);
         e.wander    = m (FP::Wander, cur.wander, ModTarget::Wander);
-        e.coupling  = m (FP::Coupling, cur.coupling, ModTarget::Coupling);
-        e.feed      = m (FP::Feed, cur.feed, ModTarget::Feed);
-        e.lifespanSec = m (FP::Lifespan, cur.lifespanSec, ModTarget::Lifespan);
         e.rasp      = m (FP::Rasp, cur.rasp, ModTarget::Rasp);
         e.driveDb   = m (FP::Drive, cur.driveDb, ModTarget::Drive);
         e.mix       = m (FP::Mix, cur.mix, ModTarget::Mix);
@@ -399,10 +389,9 @@ private:
 
     static constexpr float minQ = 0.5f, maxQ = 64.0f;
     static constexpr float maxDetuneOct = 1.0f / 6.0f;   // widest spread of one formant's cells
-    static constexpr float maxWidthOct = 0.1f;           // Width's widest L/R detune
     static constexpr float jitterShare = 0.15f;          // each cell's own offset, as a share of the formant's width
     static constexpr float freeLowOct = 6.644f;          // log2 (100 Hz): free cells live in 100 Hz…
-    static constexpr float freeSpanOct = 5.907f;         // …6 kHz (before Size)
+    static constexpr float freeSpanOct = 5.907f;         // …6 kHz (before Shift)
 
     // Fixed per-cell character, rolled once per cell index (so presets sound the same every time).
     struct CellTraits
@@ -453,14 +442,22 @@ private:
         }
     }
 
-    struct Placement { float octs, q, gainDb, widthOct; };   // widthOct: how far Width may detune L/R
+    struct Placement { float octs, q, gainDb; };
 
-    // Where cell c sits for a vowel position, size, bandwidth factor and scatter amount.
-    // pop: whose drift and life to use (the channel's own when Stereo life is independent, else 0).
-    Placement place (int c, int pop, float vowel, float sizeOct, float bwScale, float scatter) const noexcept
+    // Where cell c sits for a vowel position, shift, bandwidth factor and scatter amount.
+    Placement place (int c, float vowel, float shiftOct, float bwScale, float scatter) const noexcept
     {
         const auto k = formantOf[(size_t) c];
-        const auto fm = formants::at (vowel, k);
+        auto fm = formants::at (vowel, k);
+        // Stretch: the spacing of the formants above F1 (in octaves) times 0.6…1.6. The bandwidth
+        // scales with the frequency, so a formant keeps its shape.
+        if (stretchFactor != 1.0f && k > 0)
+        {
+            const float f1 = formants::at (vowel, 0).hz;
+            const float moved = f1 * std::exp2 (stretchFactor * std::log2 (fm.hz / f1));
+            fm.bwHz *= moved / fm.hz;
+            fm.hz = moved;
+        }
         const auto& tr = traits[(size_t) c];
         const float bw = fm.bwHz * bwScale;
 
@@ -471,9 +468,9 @@ private:
         const float bwOct = std::log2 ((fm.hz + 0.5f * bw) / std::max (1.0f, fm.hz - 0.5f * bw));
         const float span = std::min (0.5f * bwOct, maxDetuneOct);
         // Life: each formant drifts on its own; openness (jaw) moves F1 most.
-        const float driftOct = formantDrift[(size_t) pop][(size_t) k] + openness[(size_t) pop] * (k == 0 ? opennessF1Oct : opennessOct);
+        const float driftOct = formantDrift[(size_t) k] + openness * (k == 0 ? opennessF1Oct : opennessOct);
         // Life: a reborn cell lands a little elsewhere in its formant (up to its whole span, times Flux).
-        const auto& lf = life[(size_t) pop][(size_t) c];
+        const auto& lf = life[(size_t) c];
         const float formantOct = std::log2 (fm.hz) + driftOct
                                + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter + lifeDepth * lf.shift);
         // Two resonant stages: a cell's -3 dB width is about 0.64 f / Q.
@@ -486,14 +483,10 @@ private:
         const float freeOct = freeLowOct + freeSpanOct * freePos;
         const float freeQ = std::clamp (4.0f / bwScale * std::exp2 (tr.freeQ), minQ, maxQ);
 
-        // Width detunes L/R by up to 0.1 octave, but no further than a third of the formant's width.
-        const float formantWidthOct = std::min (maxWidthOct, bwOct / 3.0f);
-
         const float s = std::clamp (scatter, 0.0f, 1.0f);
-        return { formantOct + (freeOct - formantOct) * s - sizeOct,
+        return { formantOct + (freeOct - formantOct) * s + shiftOct,
                  std::exp2 (std::log2 (formantQ) + (std::log2 (freeQ) - std::log2 (formantQ)) * s),
-                 formantDb + (tr.freeGainDb - formantDb) * s,
-                 formantWidthOct + (maxWidthOct - formantWidthOct) * s };
+                 formantDb + (tr.freeGainDb - formantDb) * s };
     }
 
     // Coupling, control rate: each cell's energy (its output level, ~20 ms) relative to the field's
@@ -557,17 +550,13 @@ private:
 
     void resetLife() noexcept
     {
-        for (size_t p = 0; p < life.size(); ++p)
+        lifeRng.seed (0xC0FFEE11u);
+        for (auto& l : life)
         {
-            auto& rng = lifeRng[p];
-            rng.seed (0xC0FFEE11u + 0x2545F491u * (uint32_t) p);
-            for (auto& l : life[p])
-            {
-                l = CellLife {};
-                rollLife (l, rng);
-                l.shift = l.freeShift = 0.0f;                    // the first generation sits on the knobs' layout
-                l.hunger = 0.5f * (rng.nextBipolar() + 1.0f);    // staggered, so they don't all die together
-            }
+            l = CellLife {};
+            rollLife (l, lifeRng);
+            l.shift = l.freeShift = 0.0f;                        // the first generation sits on the knobs' layout
+            l.hunger = 0.5f * (lifeRng.nextBipolar() + 1.0f);    // staggered, so they don't all die together
         }
         births = 0;
     }
@@ -589,10 +578,9 @@ private:
         const float attackCoef = 1.0f - std::exp (-dt / attack), releaseCoef = 1.0f - std::exp (-dt / release);
         const float foodFloor = std::max (minFood, 0.25f * energyMean);
 
-        for (int p = 0; p < numPopulations; ++p)
         for (int c = 0; c < activeCells; ++c)
         {
-            auto& l = life[(size_t) p][(size_t) c];
+            auto& l = life[(size_t) c];
             const float e = energy[(size_t) c];
             const float fed = std::max (e / (e + foodFloor), excitation[(size_t) c]);   // 0 starving .. 1 well fed
 
@@ -613,7 +601,7 @@ private:
                 l.vitality -= l.vitality * releaseCoef;
                 if (l.vitality < 0.02f && ! l.moved)
                 {
-                    rollLife (l, lifeRng[(size_t) p]);   // silent now: move it to where it will be reborn
+                    rollLife (l, lifeRng);   // silent now: move it to where it will be reborn
                     l.moved = true;
                 }
                 const float chancePush = 1.0f / (l.rest * lifespan);
@@ -645,15 +633,14 @@ private:
 
     void resetRasp() noexcept
     {
-        for (int ch = 0; ch < maxChannels; ++ch)
-            for (int c = 0; c < maxCells; ++c)
-            {
-                const auto seed = 0xA5A5F00Du + 131u * (uint32_t) c + 7919u * (uint32_t) ch;
-                raspFreqNoise[(size_t) ch][(size_t) c].seed (seed);
-                raspAmpNoise[(size_t) ch][(size_t) c].seed (seed ^ 0x5bd1e995u);
-                raspState[(size_t) ch][(size_t) c] = {};
-                raspOct[(size_t) ch][(size_t) c] = 0.0f;
-            }
+        for (int c = 0; c < maxCells; ++c)
+        {
+            const auto seed = 0xA5A5F00Du + 131u * (uint32_t) c;
+            raspFreqNoise[(size_t) c].seed (seed);
+            raspAmpNoise[(size_t) c].seed (seed ^ 0x5bd1e995u);
+            raspOct[(size_t) c] = 0.0f;
+            for (auto& ch : raspState) ch[(size_t) c] = {};
+        }
         raspOn = false;
     }
 
@@ -667,28 +654,24 @@ private:
         growlHigh = keep;
         growlLow = keep * low;
 
-        for (int ch = 0; ch < maxChannels; ++ch)
-            for (int c = 0; c < activeCells; ++c)
+        // Both channels shake the same way (the stereo image stays as it came in); each channel
+        // only counts its own cycles for the growl.
+        for (int c = 0; c < activeCells; ++c)
+        {
+            const auto ci = (size_t) c;
+            if (! raspOn)
             {
-                auto& r = raspState[(size_t) ch][(size_t) c];
-                if (raspOn && ch == 1 && numPopulations == 1)   // linked: the right channel shakes with the left
-                {
-                    if (! wasOn) r = {};
-                    raspOct[1][(size_t) c] = raspOct[0][(size_t) c];
-                    r.ampStep = (raspState[0][(size_t) c].amp + raspState[0][(size_t) c].ampStep * (float) controlInterval - r.amp) / (float) controlInterval;
-                    continue;
-                }
-                if (! raspOn)
-                {
-                    raspOct[(size_t) ch][(size_t) c] = 0.0f;
-                    r = {};
-                    continue;
-                }
-                if (! wasOn) r = {};
-                raspOct[(size_t) ch][(size_t) c] = amount * maxRaspOct * raspFreqNoise[(size_t) ch][(size_t) c].advance (raspRateHz, tickDt);
-                const float targetAmp = 1.0f + amount * maxRaspAmp * raspAmpNoise[(size_t) ch][(size_t) c].advance (raspRateHz, tickDt);
-                r.ampStep = (targetAmp - r.amp) / (float) controlInterval;
+                raspOct[ci] = 0.0f;
+                for (auto& ch : raspState) ch[ci] = {};
+                continue;
             }
+            if (! wasOn)
+                for (auto& ch : raspState) ch[ci] = {};
+            raspOct[ci] = amount * maxRaspOct * raspFreqNoise[ci].advance (raspRateHz, tickDt);
+            const float targetAmp = 1.0f + amount * maxRaspAmp * raspAmpNoise[ci].advance (raspRateHz, tickDt);
+            for (auto& ch : raspState)
+                ch[ci].ampStep = (targetAmp - ch[ci].amp) / (float) controlInterval;
+        }
     }
 
     void controlTick (int sampleOffset) noexcept
@@ -700,54 +683,31 @@ private:
         mod.computeSlots();
         const FieldSettings e = effectiveSettings();
 
-        // Stereo life: one population / chaos / rasp for both channels, or one per channel.
-        numPopulations = (stereo && cur.stereoIndependent) ? 2 : 1;
+        // Flux: one knob from calm to chaotic. The macro sets every life process (tests may override).
+        const float flux = std::clamp (e.fluxAmount, 0.0f, 1.0f);
+        FluxMacro mc = FluxMacro::at (flux);
+        const auto& ov = cur.macroOverride;
+        if (ov.driftHz >= 0.0f)     mc.driftHz = ov.driftHz;
+        if (ov.lifespanSec >= 0.0f) mc.lifespanSec = ov.lifespanSec;
+        if (ov.coupling >= 0.0f)    mc.coupling = ov.coupling;
+        if (ov.feed >= 0.0f)        mc.feed = ov.feed;
 
-        // Life (phase 2): the chaos moves the throat. Flux × Wander sets how far; 0 = still.
-        const float roam = std::clamp (e.fluxAmount * e.wander, 0.0f, 1.0f);
-        std::array<float, maxChannels> vowelNow {}, sizeNow {};
-        for (int p = 0; p < maxChannels; ++p)
-        {
-            const auto& chaosOut = chaos[(size_t) p].advance (e.driftHz, tickDt);   // both run, so switching is seamless
-            vowelNow[(size_t) p] = cur.vowel + roam * maxVowelWander * chaosOut.vowel;
-            sizeNow[(size_t) p] = e.sizeOct + roam * maxSizeWanderOct * chaosOut.size;
-            openness[(size_t) p] = roam * chaosOut.openness;
-            for (size_t k = 0; k < formants::numFormants; ++k)
-                formantDrift[(size_t) p][k] = roam * maxFormantWanderOct * chaosOut.formant[k];
-        }
+        // Life: the chaos moves the throat. Flux × Wander sets how far; 0 = still.
+        // Both channels share one chaos, one population and one rasp: the stereo image stays as it came in.
+        const float roam = std::clamp (flux * e.wander, 0.0f, 1.0f);
+        stretchFactor = std::exp2 (maxStretchOct * std::clamp (e.stretch, -1.0f, 1.0f));
+        const auto& chaosOut = chaos.advance (mc.driftHz, tickDt);
+        const float vowelNow = cur.vowel + roam * maxVowelWander * chaosOut.vowel;
+        const float shiftNow = e.shiftOct + roam * maxShiftWanderOct * chaosOut.size;
+        openness = roam * chaosOut.openness;
+        for (size_t k = 0; k < formants::numFormants; ++k)
+            formantDrift[k] = roam * maxFormantWanderOct * chaosOut.formant[k];
 
-        // Life (phase 3): energy coupling. Flux × Coupling sets how strongly.
-        updateCoupling (std::clamp (e.fluxAmount * e.coupling, 0.0f, 1.0f));
-
-        // Life (phase 4): cells are born, live, die and are reborn. Flux sets how deep it cuts.
-        updateLife (std::clamp (e.fluxAmount, 0.0f, 1.0f), std::clamp (e.feed, 0.0f, 1.0f), std::max (0.01f, e.lifespanSec));
-
-        // Life (phase 5): rasp. Flux × Rasp sets how rough.
-        updateRasp (std::clamp (e.fluxAmount * e.rasp, 0.0f, 1.0f));
+        // Energy coupling, life cycle and rasp, all driven by Flux.
+        updateCoupling (std::clamp (mc.coupling, 0.0f, 1.0f));
+        updateLife (flux, std::clamp (mc.feed, 0.0f, 1.0f), std::max (0.01f, mc.lifespanSec));
+        updateRasp (std::clamp (flux * e.rasp, 0.0f, 1.0f));
         effMix = e.mix;
-
-        // For the display: where each formant is headed (vowel, drift, openness, size; left channel).
-        for (int k = 0; k < numFormants; ++k)
-        {
-            const auto fm = formants::at (vowelNow[0], k);
-            const float drift = formantDrift[0][(size_t) k] + openness[0] * (k == 0 ? opennessF1Oct : opennessOct);
-            formantTargetHz[(size_t) k] = std::exp2 (std::log2 (fm.hz) + drift - sizeNow[0]);
-        }
-
-        // Pitch anchor (phase 6): Follow listens to the input every ~20 ms.
-        const bool anchorOn = cur.anchor != AnchorMode::Off;
-        if (cur.anchor == AnchorMode::Follow && ++pitchCounter >= pitchTicks)
-        {
-            pitchCounter = 0;
-            pitch.analyse();
-        }
-        const float f0 = pitch.getPitch();
-        const float f0Oct = f0 > 0.0f ? std::log2 (f0) : 0.0f;
-        auto snap = [&] (float oct) {
-            if (cur.anchor == AnchorMode::Scale) return anchor::snapToScale (oct, cur.anchorKey, cur.anchorScale);
-            if (cur.anchor == AnchorMode::Follow && f0 > 0.0f) return anchor::snapToHarmonic (oct, f0Oct);
-            return oct;
-        };
 
         // Broken: coefficients only update every 8th tick, so movement steps instead of gliding.
         const bool broken = cur.character == Character::Broken;
@@ -764,8 +724,9 @@ private:
         if (assignedCells != activeCells)
             assignFormants (activeCells);
 
-        // LFO connections with a Flux share: the living cells absorb them (last tick's life gains).
-        mod.absorb (levelMod, activeCells, numPopulations);
+        // LFO connections with a Flux share: the living cells absorb them (last tick's life gains),
+        // in lockstep at Flux 0 and each in its own way at Flux 1.
+        mod.absorb (levelMod, activeCells, flux);
 
         const float maxHz = 0.45f * sampleRate;
         constexpr float vowelRange = (float) formants::numShapes;   // the Vowel knob spans the whole ring
@@ -781,59 +742,39 @@ private:
 
         for (int c = 0; c < activeCells; ++c)
         {
-            // Level and the unmodulated position come from the knobs alone (shared by both channels).
-            const auto base = place (c, 0, vowelNow[0], sizeNow[0], bandwidthScale (cur.resonance), cur.scatter);
+            const auto ci = (size_t) c;
+            // Level and the unmodulated position come from the knobs alone.
+            const auto base = place (c, vowelNow, shiftNow, bandwidthScale (cur.resonance), cur.scatter);
             const float f = std::exp2 (base.octs);
-            cellFreq[(size_t) c] = f;
+            cellFreq[ci] = f;
             // Cells pushed above the usable range fade out instead of piling up at Nyquist.
-            targetGain[(size_t) c] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) * excitedGain[(size_t) c] : 0.0f;
-
-            // Width: alternate cells lean left/right, and L/R cutoffs move apart slightly.
-            const float side = (c % 2 == 0) ? 1.0f : -1.0f;
-            const float detuneOct = base.widthOct * e.width * side;
-            const float p = e.width * side;                // -1..1, +1 = left
-            pan[0][(size_t) c] = std::min (1.0f, 1.0f + p);
-            pan[1][(size_t) c] = std::min (1.0f, 1.0f - p);
-            for (int ch = 0; ch < maxChannels; ++ch)
-                levelMod[(size_t) ch][(size_t) c] = 1.0f - lifeDepth * (1.0f - life[(size_t) (ch < numPopulations ? ch : 0)][(size_t) c].vitality);
+            targetGain[ci] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) * excitedGain[ci] : 0.0f;
+            levelMod[ci] = 1.0f - lifeDepth * (1.0f - life[ci].vitality);
 
             if (! updateCoefficients)
                 continue;
 
+            // Per-cell modulation.
+            const float vowelOff = mod.cell (ModTarget::Vowel, c);
+            const float resOff = mod.cell (ModTarget::Resonance, c);
+            const float scatterOff = mod.cell (ModTarget::Scatter, c);
+            const auto pl = (vowelOff == 0.0f && resOff == 0.0f && scatterOff == 0.0f)
+                ? base
+                : place (c, vowelNow + vowelRange * vowelOff, shiftNow, bandwidthScale (cur.resonance + resOff), cur.scatter + scatterOff);
+
+            float octs = pl.octs;
+            if (broken)
+                octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
+            octs += raspOct[ci];
+            const float hz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
+            cellFreqNow[ci] = hz;
+            const float q = std::min (maxQ, pl.q * excitedQ[ci]);
+            cellQ[ci] = q;
+
             for (int ch = 0; ch < maxChannels; ++ch)
             {
-                // Per-cell modulation (mono uses channel 0's for both; stereo moves L and R apart).
-                const float vowelOff = mod.cell (ModTarget::Vowel, c, ch);
-                const float resOff = mod.cell (ModTarget::Resonance, c, ch);
-                const float scatterOff = mod.cell (ModTarget::Scatter, c, ch);
-                const int pop = ch < numPopulations ? ch : 0;
-                const auto pl = (pop == 0 && vowelOff == 0.0f && resOff == 0.0f && scatterOff == 0.0f)
-                    ? base
-                    : place (c, pop, vowelNow[(size_t) pop] + vowelRange * vowelOff, sizeNow[(size_t) pop],
-                             bandwidthScale (cur.resonance + resOff), cur.scatter + scatterOff);
-
-                float octs = pl.octs + (ch == 0 ? detuneOct : -detuneOct);
-                if (anchorOn)
-                {
-                    // Snap onto the nearest note / harmonic and glide there (~8 ms), so cells moving
-                    // between notes step without clicks. Rasp still shakes them afterwards.
-                    auto& a = anchorOct[(size_t) ch][(size_t) c];
-                    const float targetOct = snap (octs);
-                    a = anchorActive ? a + (targetOct - a) * anchorGlide : targetOct;
-                    octs = a;
-                }
-                else if (broken)
-                {
-                    octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
-                }
-                octs += raspOct[(size_t) ch][(size_t) c];
-                const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
-                cellFreqNow[(size_t) ch][(size_t) c] = chHz;
-                const float q = std::min (maxQ, pl.q * excitedQ[(size_t) c]);
-                cellQ[(size_t) ch][(size_t) c] = q;
-
-                auto& cell = cells[(size_t) ch][(size_t) c];
-                cell.setCoefficients (chHz, q, sampleRate);
+                auto& cell = cells[(size_t) ch][ci];
+                cell.setCoefficients (hz, q, sampleRate);
                 // The band state grows with Q (unity peak output = state / Q), so the limit scales
                 // with Q too: saturation then starts at the same output level at any resonance.
                 cell.setSaturation (satLimit * q, satAsym);
@@ -842,8 +783,6 @@ private:
 
         for (int c = 0; c < activeCells; ++c)
             cellGain[(size_t) c] += (targetGain[(size_t) c] - cellGain[(size_t) c]) * smoothCoef;
-        if (updateCoefficients)
-            anchorActive = anchorOn;   // the next switch-on jumps straight onto the notes
 
         // Level: a filter must never amplify. Find the field's loudest point (every cell centre plus
         // one octave beyond each end, summing all cells as magnitudes) and scale it to unity.
@@ -857,8 +796,8 @@ private:
                 float sum = 0.0f, full = 0.0f;
                 for (int c = 0; c < activeCells; ++c)
                 {
-                    const float m = cellGain[(size_t) c] * FluxCell::magnitude (hz / cellFreqNow[0][(size_t) c], cellQ[0][(size_t) c], 1.0f);
-                    sum += m * levelMod[0][(size_t) c];
+                    const float m = cellGain[(size_t) c] * FluxCell::magnitude (hz / cellFreqNow[(size_t) c], cellQ[(size_t) c], 1.0f);
+                    sum += m * levelMod[(size_t) c];
                     full += m;
                 }
                 loudest = std::max (loudest, sum);
@@ -867,7 +806,7 @@ private:
             float lowest = maxHz, highest = 0.0f;
             for (int c = 0; c < activeCells; ++c)
             {
-                const float f = cellFreqNow[0][(size_t) c];
+                const float f = cellFreqNow[(size_t) c];
                 probe (f);
                 lowest = std::min (lowest, f);
                 highest = std::max (highest, f);
@@ -891,14 +830,8 @@ private:
                 if (hz >= maxHz) continue;
                 // Complex sum: neighbouring formants are out of phase between their peaks and
                 // partly cancel there (a magnitude sum would over-estimate what gets through).
-                std::complex<float> sum {};
-                for (int c = 0; c < activeCells; ++c)
-                {
-                    // Two bandpass stages at the same Q: (j k x / (1 - x² + j k x))²
-                    const float x = hz / cellFreqNow[0][(size_t) c], k = 1.0f / cellQ[0][(size_t) c];
-                    const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
-                    sum += cellGain[(size_t) c] * levelMod[0][(size_t) c] * stage * stage;   // living cells only
-                }
+                const auto sum = response (hz, activeCells, cellFreqNow.data(), cellQ.data(),
+                                           [this] (int c) { return cellGain[(size_t) c] * levelMod[(size_t) c]; });
                 pinkEnergy += std::norm (sum);
             }
             const float passedDb = 10.0f * std::log10 (std::max (1.0e-12f, fieldNorm * fieldNorm * pinkEnergy / (float) makeupPoints));
@@ -909,7 +842,7 @@ private:
         // Feedback goes above unity at the top so the field can sing on its own;
         // the saturation in the loop and in the cells keeps that bounded.
         fbGain = 1.35f * e.feedback;   // the field peaks just under unity, so the top of the range self-oscillates
-        const float dampHz = std::min (20000.0f * std::exp2 (-e.damping * 5.3f), maxHz);
+        dampHz = std::min (20000.0f * std::exp2 (-e.damping * 5.3f), maxHz);
         dampCoef = 1.0f - std::exp (-2.0f * 3.14159265f * dampHz / sampleRate);
 
         publishSnapshot();
@@ -920,11 +853,28 @@ private:
         outGain = std::pow (10.0f, e.outputDb / 20.0f);
     }
 
+public:
+    // The field's complex response at hz (before the norm): the sum of every cell, two bandpass
+    // stages at the same Q each: (j k x / (1 - x² + j k x))². level (c) gives each cell's gain.
+    // Shared by the makeup estimate and the display.
+    template <typename Level>
+    static std::complex<float> response (float hz, int numCells, const float* freq, const float* q, Level&& level) noexcept
+    {
+        std::complex<float> sum {};
+        for (int c = 0; c < numCells; ++c)
+        {
+            const float x = hz / freq[c], k = 1.0f / q[c];
+            const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
+            sum += level (c) * stage * stage;
+        }
+        return sum;
+    }
+
+private:
     float sampleRate = 44100.0f;
     float smoothCoef = 1.0f, agSmooth = 1.0f, tickDt = 0.001f;
     float envCoef = 0.001f, dcCoef = 0.999f;
     bool  firstTick = true;
-    bool  stereo = true;
     int   samplesUntilTick = 0;
     uint32_t tickCounter = 0;
 
@@ -936,8 +886,7 @@ private:
     int activeCells = 0;
     std::array<std::array<FluxCell, maxCells>, maxChannels> cells {};
     std::array<float, maxCells> cellFreq {}, cellGain {}, targetGain {};
-    std::array<std::array<float, maxCells>, maxChannels> pan {}, cellFreqNow {};
-    std::array<std::array<float, maxCells>, maxChannels> levelMod {}, cellQ {};
+    std::array<float, maxCells> cellFreqNow {}, cellQ {}, levelMod {};
     uint32_t normCounter = 0;
     Snapshot snapshot;
 
@@ -956,36 +905,29 @@ private:
 
     // Life: chaotic drift
     static constexpr float maxVowelWander = 2.0f;        // ring positions (shapes) either way
-    static constexpr float maxSizeWanderOct = 0.25f;
+    static constexpr float maxShiftWanderOct = 0.25f;
+    static constexpr float maxStretchOct = 0.7f;   // Stretch ±1 = formant spacing ×1.62 / ×0.62
+    float stretchFactor = 1.0f;
     static constexpr float maxFormantWanderOct = 1.0f;   // each formant on its own
     static constexpr float opennessF1Oct = 0.4f, opennessOct = 0.12f;   // jaw: F1 moves most
-    std::array<FluxChaos, maxChannels> chaos;   // [1] only heard when Stereo life is independent
-    std::array<float, maxChannels> openness {};
-    std::array<std::array<float, formants::numFormants>, maxChannels> formantDrift {};
-    int numPopulations = 1;
-    std::array<float, formants::numFormants> formantTargetHz {};
-
-    // Pitch anchor
-    PitchDetector pitch;
-    int pitchTicks = 30, pitchCounter = 0;
-    float anchorGlide = 1.0f;
-    bool anchorActive = false;
-    std::array<std::array<float, maxCells>, maxChannels> anchorOct {};
+    FluxChaos chaos;
+    float openness = 0.0f;
+    std::array<float, formants::numFormants> formantDrift {};
 
     // Life: cycle
     static constexpr float maxPopulationLift = 4.0f;   // +12 dB: how far the norm lifts a thinned-out population
     static constexpr float minFood = 1.0e-7f;          // energy below this (about -70 dB) is no food
     static constexpr float minRebirthSec = 0.05f;      // energy-driven rebirth takes at least this long
-    std::array<std::array<CellLife, maxCells>, maxChannels> life {};   // [1]: the right channel's own population
+    std::array<CellLife, maxCells> life {};
 
     // Life: rasp
     static constexpr float maxRaspOct = 0.08f, maxRaspAmp = 0.5f, maxGrowl = 0.8f, raspRateHz = 180.0f;
-    std::array<std::array<SmoothNoise, maxCells>, maxChannels> raspFreqNoise, raspAmpNoise;
-    std::array<std::array<RaspState, maxCells>, maxChannels> raspState {};
-    std::array<std::array<float, maxCells>, maxChannels> raspOct {};
+    std::array<SmoothNoise, maxCells> raspFreqNoise, raspAmpNoise;
+    std::array<std::array<RaspState, maxCells>, maxChannels> raspState {};   // per channel: its own cycles
+    std::array<float, maxCells> raspOct {};
     bool  raspOn = false;
     float growlHigh = 1.0f, growlLow = 1.0f;
-    std::array<FastRandom, maxChannels> lifeRng;
+    FastRandom lifeRng;
     float lifeDepth = 0.0f, energyMean = 0.0f;
     uint32_t births = 0;
 
@@ -1008,7 +950,7 @@ private:
 
     // Feedback loop
     std::array<float, maxChannels> fbState {}, dampState {}, dcX {}, dcY {};
-    float fbGain = 0.0f, dampCoef = 1.0f;
+    float fbGain = 0.0f, dampCoef = 1.0f, dampHz = 20000.0f;
 
     // Auto-gain
     float inPow = 0.0f, wetPow = 0.0f, agGain = 1.0f;
