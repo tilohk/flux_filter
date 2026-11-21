@@ -174,6 +174,13 @@ src/presets/PresetManager.h // new factory set
    - Deterministic: the life random generator is reseeded on every prepare.
    - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.3 % of one core.
 5. **Rasp:** jitter and subharmonic growl.
+   **Built (2026-11-21):**
+   - **Rasp** (0–1, replaces Flux Stereo, ID `rasp`, default 0 = clean, mod target); strength = Flux × Rasp.
+   - *Jitter:* every cell's frequency (up to ±0.08 oct) and level (up to ±50 %) shake with their own band-limited noise. The noise is value noise at ~180 Hz in two layers, per cell and channel, updated every control tick (1.5 kHz at 48 kHz); the level is ramped per sample. Measured at full: ~0.006 oct per tick, 0.15 oct in all.
+   - *Growl:* every other cycle of each cell (counted at rising zero crossings) is turned down by up to 80 %. The period doubles and a sub-octave appears, like vocal fry. Both halves are scaled so the power stays the same. Measured on a 650 Hz tone: sub-octave −65 dB (clean) → −12 dB (Rasp 50 %) → −4 dB (100 %) relative to the fundamental.
+   - Level on noise within ~1 dB of clean. Saturation colour stays with Character.
+   - Presets: Broken Radio and Deep Body use Rasp.
+   - CPU (stereo, block 256, 48 kHz, every life process on incl. Rasp 50 %): 16 cells + 16 connections 3.0 % of one core.
 6. **Pitch anchor and Stereo life.**
 7. **Parameters, LFO flux redefinition, UI:** Flux section, Cells labels, field display.
 8. **Polish:** new factory presets, benchmark, pluginval (strictness 10, VST3 + AU), auval, Ableton Live 12 by hand.

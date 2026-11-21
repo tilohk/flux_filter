@@ -44,7 +44,7 @@ enum class FP : int
 {
     Vowel, Size, Resonance, Scatter, Width,
     Feedback, Damping,
-    Drift, FluxAmount, Wander, Coupling, Feed, Lifespan, FluxStereo,
+    Drift, FluxAmount, Wander, Coupling, Feed, Lifespan, Rasp,
     Drive, Mix, Output,
     Lfo1Rate, Lfo2Rate, Lfo3Rate,
     Lfo1Flux, Lfo2Flux, Lfo3Flux,
@@ -67,7 +67,7 @@ inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
         { "coupling",   "Coupling",        0.0f,  1.0f,     0.3f },                          // ringing cells feed their neighbours
         { "feed",       "Feed",            0.0f,  1.0f,     0.5f },                          // life cycle: chance ↔ input energy
         { "lifespan",   "Lifespan",        0.05f, 20.0f,    2.0f,   1.5f,   0.0f,  "s" },   // mean life of a cell
-        { "fluxStereo", "Flux Stereo",     0.0f,  1.0f,     0.3f },
+        { "rasp",       "Rasp",            0.0f,  1.0f,     0.0f },                          // throat roughness: jitter + growl
         { "drive",      "Drive",           0.0f,  24.0f,    0.0f,   0.0f,   0.01f, "dB" },
         { "mix",        "Mix",             0.0f,  1.0f,     1.0f },
         { "output",     "Gain",            -24.0f, 24.0f,   0.0f,   0.0f,   0.01f, "dB" },

@@ -13,6 +13,7 @@ using namespace flux;
 static double run (double sr, int density, bool busyMatrix, int block = 256, double seconds = 20.0)
 {
     FieldSettings fs; fs.density = density; fs.resonance = 0.8f; fs.fluxAmount = 0.6f; fs.character = Character::Warm;
+    fs.rasp = 0.5f;   // every life process on (drift, coupling, life cycle, rasp)
     ModSettings ms;
     if (busyMatrix)
     {

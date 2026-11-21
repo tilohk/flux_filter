@@ -65,7 +65,8 @@ int main()
                 s.density = density; s.resonance = 1.0f; s.driveDb = 24.0f;
                 s.character = (Character) character; s.limiter = limiter;
                 s.feedback = 1.0f; s.damping = 0.0f; s.width = 1.0f;
-                s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 5.0f; s.coupling = 1.0f;
+                s.fluxAmount = 1.0f; s.wander = 1.0f; s.driftHz = 5.0f; s.coupling = 1.0f; s.rasp = 1.0f;
+                s.feed = 0.5f; s.lifespanSec = 0.05f;
                 f.setSettings (s); f.prepare (sr);
 
                 auto l = noise ((size_t) sr * 2, 1.0f, 1), r = noise ((size_t) sr * 2, 1.0f, 2);
@@ -428,6 +429,54 @@ int main()
         play (1.0f, true, tick);
         CHECK (f.getBirths() > before, "food should bring cells back");
         std::printf ("life energy: after 3 s silence the most vital cell %.2f; tone again: %u births\n", most, f.getBirths() - before);
+    }
+
+    // 6d. Rasp: growl adds the sub-octave of a tone, jitter shakes the cells quickly but not far,
+    //     the level stays; Rasp 0 or Flux 0 is clean.
+    {
+        auto goertzelDb = [] (const std::vector<float>& v, size_t a, size_t b, double hz) {
+            const double w = 2.0 * M_PI * hz / sr, c = 2.0 * std::cos (w); double s1 = 0, s2 = 0;
+            for (size_t i = a; i < b; ++i) { const double s0 = v[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+            return 10.0 * std::log10 ((s1 * s1 + s2 * s2 - c * s1 * s2) / ((double) (b - a) * (double) (b - a)) + 1e-30);
+        };
+        FieldSettings base; base.density = 9; base.fluxAmount = 1.0f; base.wander = 0.0f; base.coupling = 0.0f;
+        base.feed = 0.0f; base.lifespanSec = 1.0e4f; base.width = 0.0f; base.autoGain = false; base.limiter = false;
+        const float hz = settle (base)->getCellFrequency (1);
+        auto subOctave = [&] (float flux, float rasp) {
+            FieldSettings s = base; s.fluxAmount = flux; s.rasp = rasp;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            auto v = sine (48000 * 2, hz, 0.1f); run (f, v, nullptr);
+            return goertzelDb (v, 48000, 96000, hz * 0.5) - goertzelDb (v, 48000, 96000, hz);
+        };
+        const double clean = subOctave (1.0f, 0.0f), off = subOctave (0.0f, 1.0f), rough = subOctave (1.0f, 1.0f);
+        std::printf ("rasp: sub-octave of a %.0f Hz tone vs fundamental: rasp 0 %+.1f dB, flux 0 %+.1f dB, rasp 1 %+.1f dB\n", hz, clean, off, rough);
+        CHECK (clean < -40.0 && off < -40.0, "rasp should be off (%.1f / %.1f dB)", clean, off);
+        CHECK (rough > -10.0, "growl too weak (%.1f dB)", rough);
+
+        FieldSettings s = base; s.rasp = 1.0f;
+        FluxField f; f.setSettings (s); f.prepare (sr);
+        std::vector<float> buf (FluxField::controlInterval);
+        std::vector<float> octs;
+        for (int k = 0; k < 3000; ++k)
+        {
+            std::fill (buf.begin(), buf.end(), 0.0f); f.process (buf.data(), nullptr, FluxField::controlInterval);
+            octs.push_back (std::log2 (f.getCellFrequencyNow (1)));
+        }
+        double step = 0.0; for (size_t i = 1; i < octs.size(); ++i) step += std::abs (octs[i] - octs[i - 1]);
+        step /= (double) (octs.size() - 1);
+        const float spread = *std::max_element (octs.begin(), octs.end()) - *std::min_element (octs.begin(), octs.end());
+        std::printf ("rasp: jitter moves cell 1 by %.4f oct per tick on average, %.3f oct in all\n", step, spread);
+        CHECK (step > 0.003 && spread < 0.2f, "jitter %.4f oct per tick, range %.3f oct", step, spread);
+
+        auto level = [&] (float rasp) {
+            FieldSettings d = base; d.rasp = rasp;
+            FluxField g; g.setSettings (d); g.prepare (sr);
+            auto w = noise (48000 * 3, 0.3f, 5); const double in = rmsTail (w); run (g, w, nullptr);
+            return 20.0 * std::log10 (rmsTail (w) / in);
+        };
+        const double l0 = level (0.0f), l1 = level (1.0f);
+        std::printf ("rasp: noise level %+.1f dB clean, %+.1f dB at full rasp\n", l0, l1);
+        CHECK (std::abs (l1 - l0) < 2.0, "rasp changes the level by %.1f dB", l1 - l0);
     }
 
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,

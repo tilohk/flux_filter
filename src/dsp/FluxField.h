@@ -41,6 +41,7 @@ struct FieldSettings
     float coupling   = 0.3f;    // how much ringing cells feed their neighbours (times Flux)
     float feed       = 0.5f;    // life cycle driver: 0 = chance, 1 = input energy
     float lifespanSec = 2.0f;   // mean life of a cell (chance) / how long it survives starving (energy)
+    float rasp       = 0.0f;    // throat roughness: jitter + sub-octave growl (times Flux); 0 = clean
     // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
     PropagationSettings propagation;
 
@@ -97,6 +98,7 @@ public:
         excAttack    = tickCoef (0.08f);
         excRelease   = tickCoef (1.5f);
         resetLife();
+        resetRasp();
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         mod.prepare (sampleRate, ticksPerSecond);
@@ -257,10 +259,21 @@ private:
             if (bleed > 0.0f)
                 in += bleed * (bleedLeft[ci] * before + bleedRight[ci] * prev[ci + 1]);   // bleedRight is 0 for the last cell
             const float y = cells[(size_t) ch][ci].process (in);
+            // Rasp: amplitude jitter, and growl: every other cycle (rising zero crossings) is
+            // quieter, which adds the sub-octave of a rough, fry-like voice.
+            float heard = y;
+            if (raspOn)
+            {
+                auto& r = raspState[(size_t) ch][ci];
+                if (prev[ci] < 0.0f && y >= 0.0f)
+                    r.oddCycle = ! r.oddCycle;
+                r.amp += r.ampStep;
+                heard = y * r.amp * (r.oddCycle ? growlLow : growlHigh);
+            }
             before = prev[ci];
             prev[ci] = y;
             acc[ci] += y * y;
-            sum += y * cellGain[ci] * levelMod[(size_t) ch][ci] * (stereo ? pan[(size_t) ch][ci] : 1.0f);
+            sum += heard * cellGain[ci] * levelMod[(size_t) ch][ci] * (stereo ? pan[(size_t) ch][ci] : 1.0f);
         }
         return sum * fieldNorm;
     }
@@ -291,7 +304,7 @@ private:
         glide (cur.propagation.viscosity, target.propagation.viscosity);
         glide (cur.propagation.wavelength, target.propagation.wavelength);
         glide (cur.propagation.turbulence, target.propagation.turbulence);
-        glide (cur.propagation.stereo, target.propagation.stereo);
+        glide (cur.rasp, target.rasp);
         cur.propagation.direction = target.propagation.direction;
         glide (cur.driveDb, target.driveDb);
         glide (cur.mix, target.mix);
@@ -350,7 +363,7 @@ private:
         e.coupling  = m (FP::Coupling, cur.coupling, ModTarget::Coupling);
         e.feed      = m (FP::Feed, cur.feed, ModTarget::Feed);
         e.lifespanSec = m (FP::Lifespan, cur.lifespanSec, ModTarget::Lifespan);
-        e.propagation.stereo     = m (FP::FluxStereo, cur.propagation.stereo, ModTarget::FluxStereo);
+        e.rasp      = m (FP::Rasp, cur.rasp, ModTarget::Rasp);
         e.driveDb   = m (FP::Drive, cur.driveDb, ModTarget::Drive);
         e.mix       = m (FP::Mix, cur.mix, ModTarget::Mix);
         e.outputDb  = m (FP::Output, cur.outputDb, ModTarget::Output);
@@ -588,6 +601,59 @@ private:
         }
     }
 
+    // Rasp: the roughness of a throat.
+    //   Jitter: every cell's frequency (up to ±0.08 oct) and level (up to ±50 %) shake with their own
+    //           band-limited noise (value noise at ~180 Hz, two layers), updated every control tick
+    //           (1.5 kHz at 48 kHz) and, for the level, ramped per sample.
+    //   Growl:  every other cycle of each cell is turned down (up to 80 %), the period doubles and a
+    //           sub-octave appears, like vocal fry. Both halves are scaled so the power stays the same.
+    struct RaspState
+    {
+        float amp = 1.0f, ampStep = 0.0f;
+        bool  oddCycle = false;
+    };
+
+    void resetRasp() noexcept
+    {
+        for (int ch = 0; ch < maxChannels; ++ch)
+            for (int c = 0; c < maxCells; ++c)
+            {
+                const auto seed = 0xA5A5F00Du + 131u * (uint32_t) c + 7919u * (uint32_t) ch;
+                raspFreqNoise[(size_t) ch][(size_t) c].seed (seed);
+                raspAmpNoise[(size_t) ch][(size_t) c].seed (seed ^ 0x5bd1e995u);
+                raspState[(size_t) ch][(size_t) c] = {};
+                raspOct[(size_t) ch][(size_t) c] = 0.0f;
+            }
+        raspOn = false;
+    }
+
+    void updateRasp (float amount) noexcept
+    {
+        const bool wasOn = raspOn;
+        raspOn = amount > 0.0f;
+        const float growl = maxGrowl * amount;
+        const float low = 1.0f - growl;
+        const float keep = std::sqrt (2.0f / (1.0f + low * low));   // same power as without growl
+        growlHigh = keep;
+        growlLow = keep * low;
+
+        for (int ch = 0; ch < maxChannels; ++ch)
+            for (int c = 0; c < activeCells; ++c)
+            {
+                auto& r = raspState[(size_t) ch][(size_t) c];
+                if (! raspOn)
+                {
+                    raspOct[(size_t) ch][(size_t) c] = 0.0f;
+                    r = {};
+                    continue;
+                }
+                if (! wasOn) r = {};
+                raspOct[(size_t) ch][(size_t) c] = amount * maxRaspOct * raspFreqNoise[(size_t) ch][(size_t) c].advance (raspRateHz, tickDt);
+                const float targetAmp = 1.0f + amount * maxRaspAmp * raspAmpNoise[(size_t) ch][(size_t) c].advance (raspRateHz, tickDt);
+                r.ampStep = (targetAmp - r.amp) / (float) controlInterval;
+            }
+    }
+
     void controlTick (int sampleOffset) noexcept
     {
         smoothTowardsTarget();
@@ -606,6 +672,9 @@ private:
 
         // Life (phase 4): cells are born, live, die and are reborn. Flux sets how deep it cuts.
         updateLife (std::clamp (e.fluxAmount, 0.0f, 1.0f), std::clamp (e.feed, 0.0f, 1.0f), std::max (0.01f, e.lifespanSec));
+
+        // Life (phase 5): rasp. Flux × Rasp sets how rough.
+        updateRasp (std::clamp (e.fluxAmount * e.rasp, 0.0f, 1.0f));
         const float vowelNow = cur.vowel + roam * maxVowelWander * chaosOut.vowel;
         const float sizeNow = e.sizeOct + roam * maxSizeWanderOct * chaosOut.size;
         openness = roam * chaosOut.openness;
@@ -675,7 +744,7 @@ private:
                     : place (c, vowelNow + vowelRange * vowelOff, sizeNow,
                              bandwidthScale (cur.resonance + resOff), cur.scatter + scatterOff);
 
-                float octs = pl.octs + (ch == 0 ? detuneOct : -detuneOct);
+                float octs = pl.octs + (ch == 0 ? detuneOct : -detuneOct) + raspOct[(size_t) ch][(size_t) c];
                 if (broken)
                     octs = std::round (octs * 4.0f) * 0.25f;   // cutoffs snap to a quarter-octave grid
                 const float chHz = std::clamp (std::exp2 (octs), 15.0f, maxHz);
@@ -817,6 +886,14 @@ private:
     static constexpr float minFood = 1.0e-7f;          // energy below this (about -70 dB) is no food
     static constexpr float minRebirthSec = 0.05f;      // energy-driven rebirth takes at least this long
     std::array<CellLife, maxCells> life {};
+
+    // Life: rasp
+    static constexpr float maxRaspOct = 0.08f, maxRaspAmp = 0.5f, maxGrowl = 0.8f, raspRateHz = 180.0f;
+    std::array<std::array<SmoothNoise, maxCells>, maxChannels> raspFreqNoise, raspAmpNoise;
+    std::array<std::array<RaspState, maxCells>, maxChannels> raspState {};
+    std::array<std::array<float, maxCells>, maxChannels> raspOct {};
+    bool  raspOn = false;
+    float growlHigh = 1.0f, growlLow = 1.0f;
     FastRandom lifeRng;
     float lifeDepth = 0.0f, energyMean = 0.0f;
     uint32_t births = 0;

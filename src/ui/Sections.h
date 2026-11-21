@@ -39,9 +39,9 @@ public:
             addAndMakeVisible (c);
             return c;
         };
-        // Left: Lifespan, Stereo / Coupling, Feed. Right: Drift, Wander with Shape and Direction under them.
+        // Left: Lifespan, Rasp / Coupling, Feed. Right: Drift, Wander with Shape and Direction under them.
         knob (spec::FP::Lifespan, "Lifespan");
-        knob (spec::FP::FluxStereo, "Stereo");
+        knob (spec::FP::Rasp, "Rasp");
         knob (spec::FP::Coupling, "Coupling");
         knob (spec::FP::Feed, "Feed");
         knob (spec::FP::Drift, "Drift");

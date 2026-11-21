@@ -79,7 +79,7 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     s.coupling   = value (FP::Coupling);
     s.feed        = value (FP::Feed);
     s.lifespanSec = value (FP::Lifespan);
-    s.propagation.stereo     = value (FP::FluxStereo);
+    s.rasp        = value (FP::Rasp);
     s.driveDb   = value (FP::Drive);
     s.mix       = value (FP::Mix);
     s.outputDb  = value (FP::Output);

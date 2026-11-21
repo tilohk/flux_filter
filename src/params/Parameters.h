@@ -145,7 +145,7 @@ namespace flux::params
             floatParam (FP::Coupling),
             floatParam (FP::Feed),
             floatParam (FP::Lifespan),
-            floatParam (FP::FluxStereo));
+            floatParam (FP::Rasp));
 
         auto output = std::make_unique<AudioProcessorParameterGroup> ("output", "Output", "|",
             toggle (id::autoGain, "Auto Gain", true),
