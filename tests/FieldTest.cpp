@@ -2,6 +2,7 @@
 // Build & run:  cmake --build <build-dir> --target FluxFieldTest && <build-dir>/FluxFieldTest
 #include "dsp/FluxField.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <cstdio>
@@ -92,6 +93,7 @@ int main()
 
     // Field after one control tick, for checking the layout.
     auto settle = [] (FieldSettings s) {
+        s.fluxAmount = 0.0f;   // layout checks: no drift
         auto f = std::make_unique<FluxField>(); f->setSettings (s); f->prepare (sr);
         std::vector<float> tmp (64, 0.0f); f->process (tmp.data(), nullptr, 64);
         return f;
@@ -160,7 +162,7 @@ int main()
 
     // 4. A sine on a formant passes far louder than one between formants.
     {
-        FieldSettings s; s.density = 9; s.vowel = 0.0f; s.width = 0.0f; s.autoGain = false; s.limiter = false;
+        FieldSettings s; s.density = 9; s.vowel = 0.0f; s.width = 0.0f; s.autoGain = false; s.limiter = false; s.fluxAmount = 0.0f;
         const float onFormant = settle (s)->getCellFrequency (1);
         auto measure = [&] (float hz) {
             FluxField f; f.setSettings (s); f.prepare (sr);
@@ -229,20 +231,58 @@ int main()
         }
     }
 
-    // 6. Without modulation the cells stay exactly where they are, whatever Flux says (life comes in phase 2).
+    // 6. Life, chaotic drift: Flux 0 or Wander 0 is a still filter; otherwise the cells wander,
+    //    smoothly, further with more Wander, faster with more Drift, the same way on every start.
     {
-        FieldSettings s; s.width = 0.0f; s.fluxAmount = 1.0f;
-        FluxField f; f.setSettings (s); f.prepare (sr);
-        std::vector<float> buf (64, 0.0f);
-        float lo = 1e9f, hi = 0.0f;
-        for (int b = 0; b < 48000 * 4 / 64; ++b)
+        struct Trace { std::vector<float> f1, f3; };
+        auto trace = [&] (FieldSettings s, float seconds) {
+            s.width = 0.0f; s.density = 9;
+            FluxField f; f.setSettings (s); f.prepare (sr);
+            Trace t; std::vector<float> buf (FluxField::controlInterval);
+            for (int k = 0; k < (int) (seconds * sr) / FluxField::controlInterval; ++k)
+            {
+                std::fill (buf.begin(), buf.end(), 0.0f); f.process (buf.data(), nullptr, FluxField::controlInterval);
+                t.f1.push_back (std::log2 (f.getCellFrequencyNow (1)));
+                t.f3.push_back (std::log2 (f.getCellFrequencyNow (7)));
+            }
+            return t;
+        };
+        auto range = [] (const std::vector<float>& v) { return *std::max_element (v.begin(), v.end()) - *std::min_element (v.begin(), v.end()); };
+        auto maxStep = [] (const std::vector<float>& v) { float m = 0; for (size_t i = 1; i < v.size(); ++i) m = std::max (m, std::abs (v[i] - v[i - 1])); return m; };
+        auto travelled = [] (const std::vector<float>& v) { double d = 0; for (size_t i = 1; i < v.size(); ++i) d += std::abs (v[i] - v[i - 1]); return d; };
+
+        for (auto still : { std::pair { 0.0f, 1.0f }, std::pair { 1.0f, 0.0f } })
         {
-            std::fill (buf.begin(), buf.end(), 0.0f); f.process (buf.data(), nullptr, 64);
-            lo = std::min (lo, f.getCellFrequencyNow (5)); hi = std::max (hi, f.getCellFrequencyNow (5));
+            FieldSettings s; s.fluxAmount = still.first; s.wander = still.second; s.driftHz = 3.0f;
+            const auto t = trace (s, 4.0f);
+            CHECK (range (t.f1) < 1e-5f, "flux %.0f wander %.0f: cells move (%.5f oct)", still.first, still.second, range (t.f1));
         }
-        const float rangeOct = std::log2 (hi / lo);
-        std::printf ("static field: cell 5 moved over %.5f octaves in 4 s\n", rangeOct);
-        CHECK (rangeOct < 1e-4f, "cells move without modulation (%.4f oct)", rangeOct);
+
+        FieldSettings live; live.fluxAmount = 1.0f; live.wander = 1.0f; live.driftHz = 0.5f;
+        const auto t = trace (live, 20.0f);
+        std::printf ("life: flux 1, wander 1, drift 0.5 Hz: F1 cell roams %.2f oct, F3 cell %.2f oct, largest step %.4f oct/tick\n",
+                     range (t.f1), range (t.f3), maxStep (t.f1));
+        CHECK (range (t.f1) > 0.5f && range (t.f3) > 0.5f, "cells barely wander (%.2f / %.2f oct)", range (t.f1), range (t.f3));
+        CHECK (maxStep (t.f1) < 0.01f, "drift is not smooth (%.4f oct per tick)", maxStep (t.f1));
+        // F1 and F3 move on their own, not in lockstep.
+        double ab = 0, aa = 0, bb = 0;
+        float m1 = 0, m3 = 0; for (size_t i = 0; i < t.f1.size(); ++i) { m1 += t.f1[i]; m3 += t.f3[i]; } m1 /= (float) t.f1.size(); m3 /= (float) t.f3.size();
+        for (size_t i = 0; i < t.f1.size(); ++i) { ab += (t.f1[i] - m1) * (t.f3[i] - m3); aa += (t.f1[i] - m1) * (t.f1[i] - m1); bb += (t.f3[i] - m3) * (t.f3[i] - m3); }
+        const double corr = ab / std::sqrt (aa * bb + 1e-30);
+        std::printf ("life: F1/F3 correlation %.2f\n", corr);
+        CHECK (std::abs (corr) < 0.8, "formants move in lockstep (correlation %.2f)", corr);
+
+        FieldSettings half = live; half.wander = 0.25f;
+        const float rHalf = range (trace (half, 20.0f).f1);
+        CHECK (rHalf < range (t.f1) * 0.5f, "wander 0.25 should roam less (%.2f vs %.2f oct)", rHalf, range (t.f1));
+
+        FieldSettings fast = live; fast.driftHz = 4.0f;
+        const double slowPath = travelled (t.f1), fastPath = travelled (trace (fast, 20.0f).f1);
+        std::printf ("life: path in 20 s at drift 0.5 Hz %.1f oct, at 4 Hz %.1f oct\n", slowPath, fastPath);
+        CHECK (fastPath > slowPath * 3.0, "drift 4 Hz should move much faster (%.1f vs %.1f)", fastPath, slowPath);
+
+        const auto again = trace (live, 20.0f);
+        CHECK (again.f1 == t.f1, "the same settings should drift the same way on every start");
     }
 
     // 7. Feedback near the top self-oscillates (sustains after the input stops), stays bounded,

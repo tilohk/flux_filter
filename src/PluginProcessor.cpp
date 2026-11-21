@@ -73,7 +73,8 @@ FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
     s.autoGain  = pAutoGain->load() > 0.5f;
     s.limiter   = pLimiter->load() > 0.5f;
     s.fluxAmount = value (FP::FluxAmount);
-    s.propagation.travelSec  = value (FP::Travel);
+    s.driftHz    = value (FP::Drift);
+    s.wander     = value (FP::Wander);
     s.propagation.direction  = (FluxDirection) (int) pDirection->load();
     s.propagation.viscosity  = value (FP::Viscosity);
     s.propagation.wavelength = value (FP::Wavelength);

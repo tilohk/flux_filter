@@ -144,6 +144,13 @@ src/presets/PresetManager.h // new factory set
    - CPU (stereo, block 256, 48 kHz): 8 cells 0.9 %, 16 cells 1.4 %, 16 cells + 16 connections 1.9 % of one core.
    - **Makeup:** narrow formants pass little of a broadband sound (pink noise came out ~19 dB under the input). The field now estimates, every 16 control ticks, how much pink noise (equal energy per octave, 20 Hz–20 kHz) its current layout passes, using the complex sum of all cells, since neighbouring formants partly cancel between their peaks. It then lifts the wet signal to 3 dB under the input, by at most +12 dB. The cap means a tone sitting on a formant peak comes out at most 12 dB louder than it went in; Auto Gain (when on) and the limiter catch the rest. Makeup is always on, glides with the other settings, and sits after the feedback loop (loop gain is unchanged). Pink noise: Resonance 30 % −5 dB, 60 % −6 dB, 90 % −12 dB (cap reached).
 2. **Chaos drift:** FluxChaos, Drift / Wander, Flux as master. *Listen: movement never repeats, no sweep.*
+   **Built (2026-11-21):**
+   - `dsp/FluxChaos.h`: the throat position comes from a slowed Lorenz attractor. x moves the vowel, z sets openness (the jaw: F1 ±0.4 oct, other formants ±0.12 oct). It circles one lobe, then jumps to the other at unpredictable moments, so the throat wanders between two vowel neighbourhoods rather than sweeping. Size and each formant's own offset come from smooth value noise (random targets, cosine-interpolated, two layers at unrelated rates), each seeded on its own.
+   - How far it roams = Flux × Wander: vowel ±2 shapes, size ±0.25 oct, each formant ±1 oct at full. Flux 0 or Wander 0 is a still formant filter. Defaults (Flux 25 %, Wander 50 %, Drift 0.2 Hz) give a gentle breathing.
+   - **Drift** (0.01–5 Hz, replaces Flux Rate, ID `drift`) and **Wander** (0–1, replaces Travel, ID `wander`), both mod targets, sit where Rate and Travel were. Travel for an LFO's Flux share is fixed at 0.8 s until phase 7.
+   - Deterministic: the chaos starts from the same state on every prepare, so a preset moves the same way every time playback starts.
+   - Tests: still at Flux 0 / Wander 0; at full the F1 and F3 cells roam ~2 oct, independently (correlation 0.3), at most 0.002 oct per control tick; Wander 0.25 roams less than half; Drift 4 Hz travels ~7× the path of 0.5 Hz.
+   - CPU (stereo, block 256, 48 kHz): 16 cells + 16 connections 2.0 % of one core.
 3. **Energy & coupling:** per-cell energy, audio-rate bleed with bounded loop gain, control-rate transfer.
 4. **Life cycle:** vitality, birth/death, Feed and Lifespan, normalisation over living cells.
 5. **Rasp:** jitter and subharmonic growl.

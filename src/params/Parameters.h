@@ -137,10 +137,10 @@ namespace flux::params
             floatParam (FP::Drive));
 
         auto fluxGroup = std::make_unique<AudioProcessorParameterGroup> ("flux", "Flux", "|",
-            floatParam (FP::FluxRate),
+            floatParam (FP::Drift),
             choice (id::fluxShape, "Flux Shape", { "Sine", "Triangle", "Ramp", "Random" }, 0),
             floatParam (FP::FluxAmount),
-            floatParam (FP::Travel),
+            floatParam (FP::Wander),
             choice (id::direction, "Direction", { "Up", "Down", "Outward", "Inward" }, 0),
             floatParam (FP::Viscosity),
             floatParam (FP::Wavelength),

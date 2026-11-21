@@ -44,8 +44,8 @@ public:
         knob (spec::FP::FluxStereo, "Stereo");
         knob (spec::FP::Viscosity, "Viscosity");
         knob (spec::FP::Wavelength, "Wavelength");
-        knob (spec::FP::FluxRate, "Rate");
-        knob (spec::FP::Travel, "Travel");
+        knob (spec::FP::Drift, "Drift");
+        knob (spec::FP::Wander, "Wander");
         amount.getSlider().setTooltip ("Flux: how strongly the wave moves through the field");
         addAndMakeVisible (amount);
         addAndMakeVisible (shape);

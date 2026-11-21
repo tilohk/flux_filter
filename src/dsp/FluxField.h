@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FluxCell.h"
+#include "FluxChaos.h"
 #include "FluxPropagator.h"
 #include "FormantTable.h"
 #include "mod/ModMatrix.h"
@@ -33,8 +34,10 @@ struct FieldSettings
     bool  autoGain   = true;    // turn the wet signal down when it gets louder than the input (never up)
     bool  limiter    = true;    // soft safety ceiling at 0 dBFS
 
-    // Flux: how alive the field is (v2 phase 2 onwards; not used by the field yet).
-    float fluxAmount = 0.25f;
+    // Flux: how alive the field is. Life so far: chaotic drift of the throat (phase 2).
+    float fluxAmount = 0.25f;   // 0 = a still formant filter; scales every life process
+    float driftHz    = 0.2f;    // speed of the chaos
+    float wander     = 0.5f;    // how far it roams (times Flux)
     // How an LFO's Flux share travels through the cells (until v2 phase 7 redefines it).
     PropagationSettings propagation;
 
@@ -90,6 +93,7 @@ public:
         dcCoef       = 1.0f - 2.0f * 3.14159265f * 10.0f / sampleRate; // DC blocker at ~10 Hz
 
         mod.prepare (sampleRate, ticksPerSecond);
+        chaos.reset();
         agGain = 1.0f;
         for (auto& ch : levelMod) ch.fill (1.0f);
         reset();
@@ -249,6 +253,8 @@ private:
         glide (cur.feedback, target.feedback);
         glide (cur.damping, target.damping);
         glide (cur.fluxAmount, target.fluxAmount);
+        glide (cur.wander, target.wander);
+        cur.driftHz = target.driftHz;
         glide (cur.propagation.travelSec, target.propagation.travelSec);
         glide (cur.propagation.viscosity, target.propagation.viscosity);
         glide (cur.propagation.wavelength, target.propagation.wavelength);
@@ -307,7 +313,8 @@ private:
         e.feedback  = m (FP::Feedback, cur.feedback, ModTarget::Feedback);
         e.damping   = m (FP::Damping, cur.damping, ModTarget::Damping);
         e.fluxAmount = m (FP::FluxAmount, cur.fluxAmount, ModTarget::FluxAmount);
-        e.propagation.travelSec  = m (FP::Travel, cur.propagation.travelSec, ModTarget::Travel);
+        e.driftHz   = m (FP::Drift, cur.driftHz, ModTarget::Drift);
+        e.wander    = m (FP::Wander, cur.wander, ModTarget::Wander);
         e.propagation.viscosity  = m (FP::Viscosity, cur.propagation.viscosity, ModTarget::Viscosity);
         e.propagation.wavelength = m (FP::Wavelength, cur.propagation.wavelength, ModTarget::Wavelength);
         e.propagation.turbulence = m (FP::Turbulence, cur.propagation.turbulence, ModTarget::Turbulence);
@@ -385,7 +392,9 @@ private:
         // cells would partly cancel each other.
         const float bwOct = std::log2 ((fm.hz + 0.5f * bw) / std::max (1.0f, fm.hz - 0.5f * bw));
         const float span = std::min (0.5f * bwOct, maxDetuneOct);
-        const float formantOct = std::log2 (fm.hz) + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter);
+        // Life: each formant drifts on its own; openness (jaw) moves F1 most.
+        const float driftOct = formantDrift[(size_t) k] + openness * (k == 0 ? opennessF1Oct : opennessOct);
+        const float formantOct = std::log2 (fm.hz) + driftOct + span * (spreadPos[(size_t) c] + jitterShare * tr.jitter);
         // Two resonant stages: a cell's -3 dB width is about 0.64 f / Q.
         const float formantQ = std::clamp (0.64f * fm.hz / bw, minQ, maxQ);
         // Louder formants have more cells; share the formant's level between them.
@@ -412,6 +421,15 @@ private:
         mod.tickSources (tickDt, sampleOffset);
         mod.computeSlots();
         const FieldSettings e = effectiveSettings();
+
+        // Life (phase 2): the chaos moves the throat. Flux × Wander sets how far; 0 = still.
+        const auto& life = chaos.advance (e.driftHz, tickDt);
+        const float roam = std::clamp (e.fluxAmount * e.wander, 0.0f, 1.0f);
+        const float vowelNow = cur.vowel + roam * maxVowelWander * life.vowel;
+        const float sizeNow = e.sizeOct + roam * maxSizeWanderOct * life.size;
+        openness = roam * life.openness;
+        for (size_t k = 0; k < formantDrift.size(); ++k)
+            formantDrift[k] = roam * maxFormantWanderOct * life.formant[k];
         effMix = e.mix;
 
         // Broken: coefficients only update every 8th tick, so movement steps instead of gliding.
@@ -447,7 +465,7 @@ private:
         for (int c = 0; c < activeCells; ++c)
         {
             // Level and the unmodulated position come from the knobs alone (shared by both channels).
-            const auto base = place (c, cur.vowel, e.sizeOct, bandwidthScale (cur.resonance), cur.scatter);
+            const auto base = place (c, vowelNow, sizeNow, bandwidthScale (cur.resonance), cur.scatter);
             const float f = std::exp2 (base.octs);
             cellFreq[(size_t) c] = f;
             // Cells pushed above the usable range fade out instead of piling up at Nyquist.
@@ -473,7 +491,7 @@ private:
                 const float scatterOff = mod.cell (ModTarget::Scatter, c, ch);
                 const auto pl = (vowelOff == 0.0f && resOff == 0.0f && scatterOff == 0.0f)
                     ? base
-                    : place (c, cur.vowel + vowelRange * vowelOff, e.sizeOct,
+                    : place (c, vowelNow + vowelRange * vowelOff, sizeNow,
                              bandwidthScale (cur.resonance + resOff), cur.scatter + scatterOff);
 
                 float octs = pl.octs + (ch == 0 ? detuneOct : -detuneOct);
@@ -595,6 +613,15 @@ private:
     std::array<float, maxCells> spreadPos {};
 
     float fieldNorm = 1.0f;
+
+    // Life: chaotic drift
+    static constexpr float maxVowelWander = 2.0f;        // ring positions (shapes) either way
+    static constexpr float maxSizeWanderOct = 0.25f;
+    static constexpr float maxFormantWanderOct = 1.0f;   // each formant on its own
+    static constexpr float opennessF1Oct = 0.4f, opennessOct = 0.12f;   // jaw: F1 moves most
+    FluxChaos chaos;
+    float openness = 0.0f;
+    std::array<float, formants::numFormants> formantDrift {};
     static constexpr int makeupPointsPerOct = 6, makeupPoints = 10 * makeupPointsPerOct + 1;   // 20 Hz … 20.5 kHz
     static constexpr float makeupTargetDb = -3.0f, maxMakeupDb = 12.0f;
     float makeup = 1.0f, makeupTarget = 1.0f;

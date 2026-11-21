@@ -44,7 +44,7 @@ enum class FP : int
 {
     Vowel, Size, Resonance, Scatter, Width,
     Feedback, Damping,
-    FluxRate, FluxAmount, Travel, Viscosity, Wavelength, Turbulence, FluxStereo,
+    Drift, FluxAmount, Wander, Viscosity, Wavelength, Turbulence, FluxStereo,
     Drive, Mix, Output,
     Lfo1Rate, Lfo2Rate, Lfo3Rate,
     Lfo1Flux, Lfo2Flux, Lfo3Flux,
@@ -61,9 +61,9 @@ inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
         { "width",      "Width",           0.0f,  1.0f,     0.5f },
         { "feedback",   "Feedback",        0.0f,  1.0f,     0.0f },
         { "damping",    "Damping",         0.0f,  1.0f,     0.3f },
-        { "fluxRate",   "Flux Rate",       0.02f, 20.0f,    0.3f,   1.0f,   0.0f,  "Hz" },
+        { "drift",      "Drift",           0.01f, 5.0f,     0.2f,   0.3f,   0.0f,  "Hz" },  // speed of the chaos
         { "flux",       "Flux",            0.0f,  1.0f,     0.25f },
-        { "travel",     "Travel",          0.0f,  4.0f,     0.8f,   0.8f,   0.0f,  "s" },
+        { "wander",     "Wander",          0.0f,  1.0f,     0.5f },                          // how far the chaos roams
         { "viscosity",  "Viscosity",       0.0f,  1.0f,     0.2f },
         { "wavelength", "Wavelength",      0.0f,  4.0f,     0.0f,   0.0f,   0.001f, "" },
         { "turbulence", "Turbulence",      0.0f,  1.0f,     0.2f },
