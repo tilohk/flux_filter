@@ -35,44 +35,88 @@ public:
         };
         constexpr float clean = 0, warm = 1, broken = 2;                 // Character
         constexpr float scaleMode = 1, follow = 2;                       // Pitch anchor
-        constexpr float keyA = 9, pentatonic = 3, harmonic = 4;
+        constexpr float keyA = 9, keyD = 2, pentatonic = 3, harmonic = 4;
         constexpr float independent = 1;                                 // Stereo life
         [[maybe_unused]] constexpr float a = 0, e = 1, i = 2, o = 3, u = 4, nasal = 5, growl = 6, schwa = 7, whisper = 8;   // Vowel ring
-        constexpr float div8 = 10;                                       // 1/8 in lfoDivisions
-        constexpr float lfoSquare = 3;
+        constexpr float div8 = 10, bar1 = 2;                             // lfoDivisions
+        constexpr float lfoSquare = 3, lfoRandom = 4;
 
+        // v2 factory set: each preset shows one side of the living formant field.
         static const std::vector<Factory> list {
             { "Init", {} },
-            { "Breathing Vowels", join ({ { "density", 9 }, { "vowel", e }, { "resonance", 0.75f },
-                                          { "flux", 0.35f }, { "drift", 0.15f }, { "wander", 0.50f },
-                                          { lfo (0, "Rate"), 0.2f }, { lfo (0, "Flux"), 1.0f } },
-                                        slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.15f)) },
-            { "Slow Tide", { { "density", 12 }, { "vowel", o }, { "size", 0.5f }, { "resonance", 0.55f }, { "scatter", 0.2f },
-                             { "flux", 0.6f }, { "drift", 0.07f }, { "wander", 0.95f }, { "coupling", 0.6f },
-                             { "character", warm }, { "feedback", 0.2f },
-                             { "anchor", scaleMode }, { "anchorKey", keyA }, { "anchorScale", harmonic } } },
-            { "Glass Rain", { { "density", 16 }, { "vowel", whisper }, { "size", -1.0f }, { "resonance", 0.9f }, { "scatter", 0.6f },
-                              { "flux", 0.5f }, { "drift", 2.5f }, { "lifespan", 0.3f }, { "feed", 0.2f },
-                              { "wander", 0.30f }, { "width", 0.8f }, { "output", 4 }, { "stereoLife", independent } } },
-            { "Deep Body", { { "density", 6 }, { "vowel", growl }, { "size", 1.5f }, { "resonance", 0.85f }, { "rasp", 0.8f },
-                             { "drive", 6 }, { "character", warm }, { "feedback", 0.35f }, { "damping", 0.6f }, { "flux", 0.15f } } },
-            { "Broken Radio", join ({ { "character", broken }, { "rasp", 0.6f }, { "density", 6 }, { "vowel", nasal }, { "size", -0.5f }, { "resonance", 0.8f },
-                                      { "drive", 12 }, { "flux", 0.4f }, { "drift", 1.5f },
+
+            // A calm throat that breathes on its own: drift and a little life.
+            { "Breathing Throat", { { "density", 9 }, { "vowel", a }, { "resonance", 0.6f },
+                                    { "flux", 0.4f }, { "drift", 0.15f }, { "wander", 0.6f }, { "coupling", 0.3f },
+                                    { "feed", 0.3f }, { "lifespan", 4.0f } } },
+
+            // Airy high formants, many cells, each channel living on its own.
+            { "Whisper Choir", { { "output", 3 }, { "density", 16 }, { "vowel", whisper }, { "resonance", 0.7f }, { "scatter", 0.15f }, { "width", 0.8f },
+                                 { "flux", 0.6f }, { "drift", 0.3f }, { "wander", 0.5f }, { "feed", 0.2f }, { "lifespan", 1.5f },
+                                 { "stereoLife", independent } } },
+
+            // Big, low, rough: the growl shape with full rasp and some drive.
+            { "Growling Beast", { { "density", 9 }, { "vowel", growl }, { "size", 1.2f }, { "resonance", 0.75f },
+                                  { "flux", 0.8f }, { "rasp", 0.9f }, { "drift", 0.4f }, { "wander", 0.4f },
+                                  { "character", warm }, { "drive", 6 } } },
+
+            // Lives off what you play: cells grow where the input has energy and starve elsewhere.
+            // Made for drums and percussive material.
+            { "Feeding Swarm", { { "density", 16 }, { "vowel", schwa }, { "resonance", 0.8f }, { "scatter", 0.5f },
+                                 { "flux", 1.0f }, { "feed", 1.0f }, { "lifespan", 0.6f }, { "coupling", 0.7f },
+                                 { "drift", 0.3f }, { "wander", 0.3f } } },
+
+            // Short-lived scattered cells: granular flicker.
+            { "Flicker Grain", { { "output", 3 }, { "density", 16 }, { "vowel", e }, { "resonance", 0.85f }, { "scatter", 0.7f }, { "width", 0.7f },
+                                 { "flux", 1.0f }, { "feed", 0.0f }, { "lifespan", 0.08f }, { "drift", 2.0f }, { "wander", 0.4f },
+                                 { "stereoLife", independent } } },
+
+            // Narrow formants locked to A minor pentatonic, ringing into each other.
+            { "Singing Stones", { { "output", 6 }, { "density", 12 }, { "vowel", o }, { "size", 0.5f }, { "resonance", 0.92f },
+                                  { "flux", 0.5f }, { "drift", 0.1f }, { "wander", 0.5f }, { "coupling", 0.5f },
+                                  { "feedback", 0.6f }, { "damping", 0.5f },
+                                  { "anchor", scaleMode }, { "anchorKey", keyA }, { "anchorScale", pentatonic } } },
+
+            // Follows the input's pitch and puts the cells on its harmonics, under the dry sound.
+            { "Harmonic Shadow", { { "output", 2 }, { "density", 12 }, { "vowel", schwa }, { "resonance", 0.9f },
+                                   { "flux", 0.4f }, { "wander", 0.3f }, { "drift", 0.2f }, { "anchor", follow }, { "mix", 0.7f } } },
+
+            // A huge, dark throat that moves very slowly.
+            { "Cave Mouth", { { "output", 6 }, { "density", 6 }, { "vowel", u }, { "size", 2.0f }, { "resonance", 0.7f },
+                              { "flux", 0.5f }, { "drift", 0.05f }, { "wander", 0.8f },
+                              { "feedback", 0.4f }, { "damping", 0.7f }, { "character", warm } } },
+
+            // A tiny, nervous throat.
+            { "Tiny Creature", { { "output", 4 }, { "density", 9 }, { "vowel", i }, { "size", -1.8f }, { "resonance", 0.7f },
+                                 { "flux", 0.8f }, { "rasp", 0.5f }, { "drift", 1.5f }, { "wander", 0.7f },
+                                 { "feed", 0.5f }, { "lifespan", 0.5f } } },
+
+            // Long swells through the whole vowel ring, an LFO absorbed loosely by the cells.
+            { "Slow Tide", join ({ { "density", 12 }, { "vowel", o }, { "resonance", 0.55f }, { "scatter", 0.1f },
+                                   { "flux", 0.7f }, { "drift", 0.05f }, { "wander", 1.0f }, { "coupling", 0.6f },
+                                   { lfo (0, "Rate"), 0.05f }, { lfo (0, "Flux"), 1.0f }, { "character", warm } },
+                                 slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.1f)) },
+
+            // Broken character, nasal throat, rasp and a tempo-synced square on Resonance.
+            { "Broken Radio", join ({ { "character", broken }, { "density", 6 }, { "vowel", nasal }, { "size", -0.5f },
+                                      { "resonance", 0.8f }, { "rasp", 0.6f }, { "drive", 12 }, { "flux", 0.4f }, { "drift", 1.5f },
                                       { lfo (1, "Sync"), 1 }, { lfo (1, "Division"), div8 }, { lfo (1, "Shape"), lfoSquare } },
                                     slot (0, ModSource::Lfo2, ModTarget::Resonance, 0.2f)) },
-            { "Singing Drone", { { "feedback", 0.92f }, { "damping", 0.4f }, { "resonance", 0.9f }, { "density", 8 }, { "vowel", schwa },
-                                 { "size", 0.8f }, { "flux", 0.2f }, { "drift", 0.05f }, { "mix", 0.8f },
-                                 { "anchor", scaleMode }, { "anchorKey", keyA }, { "anchorScale", pentatonic } } },
-            { "Ripple Sweep", { { "feed", 0.8f }, { "wander", 0.35f }, { "flux", 0.7f }, { "drift", 0.4f },
-                                { "density", 10 }, { "vowel", i }, { "scatter", 0.3f }, { "resonance", 0.7f }, { "anchor", follow } } },
-            { "Vowel Glide", join ({ { "vowel", u }, { "density", 8 }, { "resonance", 0.5f },
-                                      { "flux", 0.5f }, { "drift", 0.25f }, { "wander", 0.28f },
-                                      { lfo (0, "Rate"), 0.12f }, { lfo (0, "Flux"), 0.0f } },
-                                    slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.25f)) },
-            { "Tempo Pulse", join ({ { lfo (0, "Sync"), 1 }, { lfo (0, "Division"), div8 }, { lfo (0, "Shape"), lfoSquare },
-                                     { lfo (0, "Flux"), 1.0f }, { "wander", 0.26f }, { "density", 10 }, { "resonance", 0.8f },
-                                     { "flux", 0.2f }, { "character", clean } },
-                                   slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.2f)) },
+
+            // Vowels stepping in time: a synced random LFO on Vowel, half absorbed.
+            { "Vowel Sequencer", join ({ { "density", 9 }, { "resonance", 0.75f }, { "character", clean },
+                                         { "flux", 0.3f }, { "wander", 0.2f },
+                                         { lfo (0, "Sync"), 1 }, { lfo (0, "Division"), div8 }, { lfo (0, "Shape"), lfoRandom },
+                                         { lfo (0, "Flux"), 0.5f } },
+                                       slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.35f)) },
+
+            // Self-oscillating drone on the harmonics of D, slowly alive.
+            { "Drone Organism", join ({ { "density", 12 }, { "vowel", schwa }, { "size", 0.8f }, { "resonance", 0.9f },
+                                        { "feedback", 0.93f }, { "damping", 0.4f }, { "mix", 0.8f },
+                                        { "flux", 0.3f }, { "drift", 0.05f }, { "wander", 0.6f }, { "coupling", 0.6f },
+                                        { "anchor", scaleMode }, { "anchorKey", keyD }, { "anchorScale", harmonic },
+                                        { lfo (2, "Sync"), 1 }, { lfo (2, "Division"), bar1 } },
+                                      slot (0, ModSource::Lfo3, ModTarget::Scatter, 0.15f)) },
         };
         return list;
     }

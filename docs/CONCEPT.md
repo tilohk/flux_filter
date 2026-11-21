@@ -1,5 +1,7 @@
 # FluxFilter — Concept & v1 Plan
 
+> **Superseded for the sound engine by [CONCEPT_V2.md](CONCEPT_V2.md)** (formant field, life: drift, coupling, life cycle, rasp, pitch anchor, stereo life). The UI, modulation, output and preset sections below still describe the shared parts.
+
 ## Context
 New experimental JUCE filter plugin (VST3/AU/Standalone). Goal: deep, organic sound with a strong sound-design focus and lots of modulation. Repo is a fresh JUCE skeleton (`src/PluginProcessor.*`, `src/PluginEditor.*`, `CMakeLists.txt`). Decisions so far: **filter field** core, modulation by **drag and drop** (phase 5b replaced the matrix table), sources = **three analog-style LFOs**, one panel UI with the **Flux** knob at its centre.
 

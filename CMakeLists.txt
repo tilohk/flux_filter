@@ -80,3 +80,12 @@ add_executable(FluxBenchmark tests/Benchmark.cpp)
 target_include_directories(FluxBenchmark PRIVATE src)
 target_compile_features(FluxBenchmark PRIVATE cxx_std_20)
 target_compile_options(FluxBenchmark PRIVATE -O2)
+
+# Every factory preset through the real plugin (needs JUCE): finite, limited, not silent, not too loud.
+juce_add_console_app(FluxPresetCheck PRODUCT_NAME "FluxPresetCheck")
+target_sources(FluxPresetCheck PRIVATE tests/PresetCheck.cpp)
+target_include_directories(FluxPresetCheck PRIVATE src)
+target_compile_definitions(FluxPresetCheck PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(FluxPresetCheck PRIVATE FluxFilter juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+target_compile_options(FluxPresetCheck PRIVATE -Wno-macro-redefined)   # console app vs. plugin defaults for JUCE_STANDALONE_APPLICATION
+set_target_properties(FluxPresetCheck PROPERTIES EXCLUDE_FROM_ALL TRUE)   # builds JUCE a second time: only on request

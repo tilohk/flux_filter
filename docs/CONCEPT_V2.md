@@ -200,6 +200,17 @@ src/presets/PresetManager.h // new factory set
    - The Flux knob's tooltip describes it as "how alive the field is".
    - CPU (stereo, block 256, 48 kHz, everything on): 16 cells + 16 connections 2.8 %, with Follow 3.2 % of one core.
 8. **Polish:** new factory presets, benchmark, pluginval (strictness 10, VST3 + AU), auval, Ableton Live 12 by hand.
+   **Built (2026-11-21):**
+   - New factory set (14 presets, each showing one side of the engine): Init; Breathing Throat (drift); Whisper Choir (whisper, independent stereo); Growling Beast (growl + rasp); Feeding Swarm (energy-fed life, for drums); Flicker Grain (short-lived scattered cells); Singing Stones (A minor pentatonic, feedback); Harmonic Shadow (Follow); Cave Mouth (huge, slow); Tiny Creature (tiny, nervous); Slow Tide (whole vowel ring, absorbed LFO); Broken Radio (Broken, nasal, synced square on Resonance); Vowel Sequencer (synced random LFO on Vowel); Drone Organism (self-oscillating on harmonics of D).
+   - `tests/PresetCheck.cpp` (target `FluxPresetCheck`, built only on request because it compiles JUCE a second time) runs every factory preset through the real plugin (parameters → processor → field) on pink noise and a saw chord. It checks that the output is finite, at most 0 dBFS, not silent, and not more than 6 dB louder than the input. With per-preset Gain all 14 land between −4 and −8 dB under the input. Before that, Singing Stones and Cave Mouth were −12 dB.
+   - CPU (`FluxBenchmark`, -O2, stereo, block 256, % of one core, Apple Silicon; every life process on incl. independent stereo, Rasp 50 %):
+     | | 8 cells | 16 cells | 16 cells + 16 connections | + Follow |
+     |---|---|---|---|---|
+     | 48 kHz | 1.3 % | 2.3 % | 2.7 % | 3.1 % |
+     | 96 kHz | 2.2 % | 4.3 % | 5.0 % | 5.4 % |
+     The concept's target (16 cells stereo at 48 kHz under 3 %) holds, except with Follow (3.1 %).
+   - pluginval at strictness 10 passes on VST3 and AU (debug build). The AU shows only the known, harmless warning "Current program is -1". `auval` passes.
+   - Still to do by hand: Ableton Live 12 (playing, automation, state recall, CPU in a real set).
 
 ## Verification
 - Listening set covering the generic/experimental brief: white and pink noise, drum loop, sustained pad, spoken voice, field recording.
