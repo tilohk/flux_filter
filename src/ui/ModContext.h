@@ -13,7 +13,7 @@ class ModContext
 public:
     using APVTS = juce::AudioProcessorValueTreeState;
 
-    struct Connection { int slot; ModSource source; float depth; bool bipolar; };
+    struct Connection { int slot; ModSource source; float depth; bool bipolar; bool on; };
 
     explicit ModContext (FluxFilterAudioProcessor& p) : processor (p), state (p.apvts)
     {
@@ -23,6 +23,8 @@ public:
             s.source = state.getParameter (params::id::slot (i, "Source"));
             s.target = state.getParameter (params::id::slot (i, "Target"));
             s.depth  = state.getParameter (params::id::slot (i, "Depth"));
+            s.on     = state.getParameter (params::id::slot (i, "On"));
+            s.onValue = state.getRawParameterValue (params::id::slot (i, "On"));
             s.sourceValue = state.getRawParameterValue (params::id::slot (i, "Source"));
             s.targetValue = state.getRawParameterValue (params::id::slot (i, "Target"));
             s.depthValue  = state.getRawParameterValue (params::id::slot (i, "Depth"));
@@ -51,6 +53,8 @@ public:
     ModSource slotSource (int i) const noexcept { return (ModSource) (int) slots[(size_t) i].sourceValue->load(); }
     ModTarget slotTarget (int i) const noexcept { return (ModTarget) (int) slots[(size_t) i].targetValue->load(); }
     float slotDepth (int i) const noexcept { return slots[(size_t) i].depthValue->load(); }
+    bool slotOn (int i) const noexcept { return slots[(size_t) i].onValue->load() > 0.5f; }
+    void setSlotOn (int i, bool on) { set (slots[(size_t) i].on, on ? 1.0f : 0.0f); bump(); }
     juce::String depthParamId (int i) const { return params::id::slot (i, "Depth"); }
 
     std::vector<Connection> connectionsFor (ModTarget t) const
@@ -59,7 +63,7 @@ public:
         if (t == ModTarget::None) return list;
         for (int i = 0; i < ModSettings::numSlots; ++i)
             if (slotTarget (i) == t && slotSource (i) != ModSource::None)
-                list.push_back ({ i, slotSource (i), slotDepth (i), isBipolar (slotSource (i)) });
+                list.push_back ({ i, slotSource (i), slotDepth (i), isBipolar (slotSource (i)), slotOn (i) });
         return list;
     }
 
@@ -75,7 +79,8 @@ public:
     {
         float sum = 0.0f;
         for (const auto& c : connectionsFor (t))
-            sum += c.depth * processor.getModSourceValue (c.source);
+            if (c.on)
+                sum += c.depth * processor.getModSourceValue (c.source);
         return sum;
     }
 
@@ -93,6 +98,7 @@ public:
         set (slots[(size_t) free].source, (float) (int) s);
         set (slots[(size_t) free].target, (float) (int) t);
         set (slots[(size_t) free].depth, depth);
+        set (slots[(size_t) free].on, 1.0f);
         bump();
         return true;
     }
@@ -102,6 +108,7 @@ public:
         set (slots[(size_t) slot].depth, 0.0f);
         set (slots[(size_t) slot].source, 0.0f);
         set (slots[(size_t) slot].target, 0.0f);
+        set (slots[(size_t) slot].on, 1.0f);
         bump();
     }
 
@@ -131,7 +138,9 @@ private:
     struct Slot
     {
         juce::RangedAudioParameter* source = nullptr; juce::RangedAudioParameter* target = nullptr; juce::RangedAudioParameter* depth = nullptr;
+        juce::RangedAudioParameter* on = nullptr;
         std::atomic<float>* sourceValue = nullptr; std::atomic<float>* targetValue = nullptr; std::atomic<float>* depthValue = nullptr;
+        std::atomic<float>* onValue = nullptr;
     };
     std::array<Slot, ModSettings::numSlots> slots {};
     std::array<std::atomic<float>*, ModSettings::numLfos> unipolar {};

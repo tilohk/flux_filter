@@ -80,7 +80,7 @@ private:
 
     struct LfoParams { std::atomic<float>* sync; std::atomic<float>* division; std::atomic<float>* shape;
                        std::atomic<float>* unipolar; std::atomic<float>* flux; };
-    struct SlotParams { std::atomic<float>* source; std::atomic<float>* target; std::atomic<float>* depth; };
+    struct SlotParams { std::atomic<float>* source; std::atomic<float>* target; std::atomic<float>* depth; std::atomic<float>* on; };
     std::array<LfoParams, flux::ModSettings::numLfos> lfoParams {};
     std::array<SlotParams, flux::ModSettings::numSlots> slotParams {};
 

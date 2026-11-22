@@ -21,7 +21,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int designWidth = 880, designHeight = 778;
+    static constexpr int designWidth = 880, designHeight = 756;
 
 private:
    #if JUCE_DEBUG

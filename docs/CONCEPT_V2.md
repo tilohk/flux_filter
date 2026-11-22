@@ -288,3 +288,27 @@ cells where the ear hears one filter. Changes:
 - **Flux modulation is visible:** the big knob's value arc, its lamp and the magnetic field follow
   the modulated value (knob + live modulation offset, from the UI's modulation readout); the pointer
   stays on the knob's own setting.
+
+### UI round (2026-11-22)
+- **Field animation follows Flux smoothly:** every moving part of the aura integrates its own speed
+  (no more `time × speed`), so turning or modulating Flux changes the speed from that moment on
+  instead of making the animation race while the value changes.
+- **Vowel → Mode** (parameter id `mode`): shown as numbers 1–18, one for every throat shape and one
+  for every halfway point between two (mode 1 = shape 1, mode 2 = halfway to shape 2, …; the ring
+  wraps). Typed input takes the number.
+- **Output section in white:** Mix/Gain value arcs and the switched-on AUTO/LIMIT pills.
+- **LFO modules:** sync (a metronome icon) and polarity are equal-sized buttons stacked between the
+  Rate and Flux knobs; the bottom row is 22 px lower, the window 880 × 756. The modulation panel
+  fills the same row (three connections visible).
+- **Modulation on knobs:** the value arc of every modulated knob moves with its modulation (the
+  pointer stays on the setting); a small dot per source, in its colour, sits at the bottom of the
+  knob. The range arcs and the white live dot are gone. The modulation panel is laid out for two
+  connections (one per LFO), with taller rows.
+- **LFO modules:** sync and polarity stacked on the left, then Rate, then Flux.
+- **Connections can be switched off:** each slot has an `On` parameter (automatable, default on).
+  The source dot in the modulation panel is the switch (filled = on, ring = off); an off connection
+  keeps its depth but does nothing, and its dot under the knob turns into a ring. The panel splits
+  its height into two halves, one per possible connection.
+- **LFO colours:** dusty lavender (LFO 1) and clay rose (LFO 2), to sit with the warm theme.
+- **Filter line colour follows Flux** (after modulation, published by the field): sage at 0, the
+  flux amber at 100, line and fill. The coupling glow on the line is gone.

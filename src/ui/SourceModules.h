@@ -78,6 +78,32 @@ private:
     uint32_t seenVersion = 0;
 };
 
+// Tempo-sync switch: a small metronome icon instead of text.
+class SyncButton : public juce::TextButton
+{
+public:
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto& lf = getLookAndFeel();
+        lf.drawButtonBackground (g, *this, findColour (getToggleState() ? buttonOnColourId : buttonColourId), highlighted, down);
+
+        const auto a = getLocalBounds().toFloat().withSizeKeepingCentre (12.0f, 13.0f);
+        juce::Path body;   // a trapezoid with a base
+        body.startNewSubPath (a.getX() + a.getWidth() * 0.32f, a.getY());
+        body.lineTo (a.getX() + a.getWidth() * 0.68f, a.getY());
+        body.lineTo (a.getRight(), a.getBottom());
+        body.lineTo (a.getX(), a.getBottom());
+        body.closeSubPath();
+        juce::Path arm;    // the pendulum, leaning right
+        arm.startNewSubPath (a.getCentreX(), a.getBottom() - a.getHeight() * 0.22f);
+        arm.lineTo (a.getRight() + 1.0f, a.getY() + a.getHeight() * 0.05f);
+
+        g.setColour (findColour (getToggleState() ? textColourOnId : textColourOffId).withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
+        g.strokePath (body, juce::PathStrokeType (1.3f, juce::PathStrokeType::mitered));
+        g.strokePath (arm, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+};
+
 // An analog-style LFO: shape buttons, rate knob (note divisions when synced), sync, polarity and
 // the Flux amount (how much of its cell modulation the living cells absorb).
 class LfoModule : public juce::Component, private juce::Timer
@@ -110,7 +136,6 @@ public:
         addAndMakeVisible (rate);
         addChildComponent (division);
 
-        sync.setButtonText ("SYNC");
         sync.setClickingTogglesState (true);
         sync.setTooltip ("Lock the rate to the host tempo");
         addAndMakeVisible (sync);
@@ -126,7 +151,7 @@ public:
         updatePolarityText();
 
         flux.getSlider().getProperties().set (heroKnobProperty, true);   // looks like the big Flux knob
-        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Vowel, Resonance and Scatter the living cells absorb: "
+        flux.getSlider().setTooltip ("Flux: how much of this LFO's movement on Mode, Resonance and Scatter the living cells absorb: "
                                      "each follows it with its own delay and depth, as far as it is alive (0 = all cells exactly together)");
         addAndMakeVisible (flux);
 
@@ -150,18 +175,19 @@ public:
 
         r.removeFromTop (4);
         r.removeFromBottom (8);
-        // Left: Rate with SYNC and polarity under it. Right: the Flux knob.
-        auto left = r.removeFromLeft (r.getWidth() / 2).reduced (6, 0);
-        auto buttons = left.removeFromBottom (20);
-        sync.setBounds (buttons.removeFromLeft (buttons.getWidth() * 3 / 5));
-        buttons.removeFromLeft (4);
-        polarity.setBounds (buttons);
-        left.removeFromBottom (2);
-        rate.setBounds (left.withSizeKeepingCentre (rate.preferredWidth(), juce::jmin (left.getHeight(), rate.preferredHeight())));
+        // Sync and polarity stacked (same size) | Rate | Flux.
+        constexpr int buttonW = 30, buttonH = 22, columnW = buttonW + 8;
+        auto column = r.removeFromLeft (columnW);
+        const int knobW = r.getWidth() / 2;
+        auto left = r.removeFromLeft (knobW);
+        const int knobH = juce::jmin (r.getHeight(), rate.preferredHeight());
+        rate.setBounds (left.withSizeKeepingCentre (rate.preferredWidth(), knobH));
         division.setBounds (rate.getBounds());
+        flux.setBounds (r.withSizeKeepingCentre (flux.preferredWidth(), knobH));
 
-        flux.setBounds (r.withSizeKeepingCentre (flux.preferredWidth(), juce::jmin (left.getHeight(), flux.preferredHeight()))
-                         .withY (rate.getY()));
+        auto buttons = column.withSizeKeepingCentre (buttonW, 2 * buttonH + 6);
+        sync.setBounds (buttons.removeFromTop (buttonH));
+        polarity.setBounds (buttons.removeFromBottom (buttonH));
     }
 
 private:
@@ -182,7 +208,8 @@ private:
     SourceHandle handle;
     ParamControl rate, division, flux;
     ChoiceButtonRow shapes;
-    juce::TextButton sync, polarity;
+    SyncButton sync;
+    juce::TextButton polarity;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAttachment, polarityAttachment;
 };
 

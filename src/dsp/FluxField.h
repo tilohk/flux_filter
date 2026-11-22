@@ -102,9 +102,9 @@ public:
     {
         std::atomic<int> activeCells { 0 };
         std::array<std::atomic<float>, maxCells> freq {}, q {}, level {};   // level: gain × life, before the norm
-        std::array<std::atomic<float>, maxCells> glow {};         // excitation from its neighbours, 0..1
         std::atomic<float> norm { 1.0f }, post { 1.0f };          // inside the feedback loop / after it (makeup × auto gain)
         std::atomic<float> feedback { 0.0f }, dampHz { 20000.0f }, mix { 1.0f };
+        std::atomic<float> flux { 0.0f };                         // Flux after modulation, 0..1
     };
 
     void prepare (double newSampleRate) noexcept
@@ -355,7 +355,6 @@ private:
             snapshot.freq[ci].store (cellFreqNow[ci], relaxed);
             snapshot.q[ci].store (cellQ[ci], relaxed);
             snapshot.level[ci].store (cellGain[ci] * levelMod[ci], relaxed);
-            snapshot.glow[ci].store (excitation[ci], relaxed);
         }
         snapshot.activeCells.store (activeCells, relaxed);
         snapshot.norm.store (fieldNorm, relaxed);
@@ -363,6 +362,7 @@ private:
         snapshot.feedback.store (fbGain, relaxed);
         snapshot.dampHz.store (dampHz, relaxed);
         snapshot.mix.store (effMix, relaxed);
+        snapshot.flux.store (effFlux, relaxed);
     }
 
     // Global parameters after modulation (natural units).
@@ -685,6 +685,7 @@ private:
 
         // Flux: one knob from calm to chaotic. The macro sets every life process (tests may override).
         const float flux = std::clamp (e.fluxAmount, 0.0f, 1.0f);
+        effFlux = flux;
         FluxMacro mc = FluxMacro::at (flux);
         const auto& ov = cur.macroOverride;
         if (ov.driftHz >= 0.0f)     mc.driftHz = ov.driftHz;
@@ -880,7 +881,7 @@ private:
 
     FieldSettings target, cur;
     Matrix mod;
-    float effMix = 1.0f;
+    float effMix = 1.0f, effFlux = 0.0f;
     std::array<float, maxChannels> blockPeakPre {}, blockPeakPost {};
 
     int activeCells = 0;

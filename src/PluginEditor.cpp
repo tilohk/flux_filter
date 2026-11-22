@@ -7,7 +7,7 @@ using spec::FP;
 namespace
 {
     // Header matches audible_spec: 14 px margin, 30 px high, title right-aligned.
-    constexpr int headerTop = 14, headerH = 30, topRowH = 240, bottomH = 190, margin = 12, gap = 10,
+    constexpr int headerTop = 14, headerH = 30, topRowH = 240, bottomH = 168, margin = 12, gap = 10,
                   characterW = 174,          // 10 px from the outer knobs to the border
                   outputW = characterW;
     const char* id (FP p) { return spec::get (p).id; }
@@ -18,7 +18,7 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
     : ctx (p), presetBar (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
 {
     cells.add (ctx, params::id::density, "Density");
-    cells.add (ctx, id (FP::Vowel), "Vowel");
+    cells.add (ctx, id (FP::Vowel), "Mode");
     cells.add (ctx, id (FP::Shift), "Shift");
     cells.add (ctx, id (FP::Stretch), "Stretch");
     cells.add (ctx, id (FP::Resonance), "Resonance");

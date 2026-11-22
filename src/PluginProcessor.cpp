@@ -32,7 +32,7 @@ FluxFilterAudioProcessor::FluxFilterAudioProcessor()
 
     for (int i = 0; i < ModSettings::numSlots; ++i)
         slotParams[(size_t) i] = { get (params::id::slot (i, "Source")), get (params::id::slot (i, "Target")),
-                                   get (params::id::slot (i, "Depth")) };
+                                   get (params::id::slot (i, "Depth")), get (params::id::slot (i, "On")) };
 }
 
 FluxFilterAudioProcessor::~FluxFilterAudioProcessor() = default;
@@ -102,6 +102,7 @@ ModSettings FluxFilterAudioProcessor::readModSettings() const noexcept
         s.source = (ModSource) (int) p.source->load();
         s.target = (ModTarget) (int) p.target->load();
         s.depth  = p.depth->load();
+        s.on     = p.on->load() > 0.5f;
     }
     return m;
 }

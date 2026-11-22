@@ -94,27 +94,21 @@ namespace flux::params
             return std::make_unique<AudioParameterBool> (ParameterID { pid, v }, name, def);
         };
 
-        // Vowel: the throat shape's name near each shape, "a/e" style in between (the ring wraps).
-        auto vowelText = AudioParameterFloatAttributes()
+        // Mode: a number for every throat shape and every halfway point between two (the ring
+        // wraps), so 9 shapes give modes 1-18: mode 1 = shape 1, mode 2 = halfway to shape 2, ...
+        constexpr int numModes = 2 * formants::numShapes;
+        auto modeText = AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float pos, int) {
-                const int n = formants::numShapes;
-                const int nearest = (int) std::lround (pos) % n;
-                if (std::abs (pos - std::round (pos)) < 0.15f)
-                    return String (formants::shapes[(size_t) nearest].name);
-                const int lo = std::clamp ((int) pos, 0, n - 1);
-                return String (formants::shapes[(size_t) lo].name) + "/" + formants::shapes[(size_t) ((lo + 1) % n)].name;
+                return String ((int) std::lround (pos * 2.0f) % numModes + 1);
             })
             .withValueFromStringFunction ([] (const String& t) {
-                const auto name = t.trim().toLowerCase();
-                for (int i = 0; i < formants::numShapes; ++i)
-                    if (name == formants::shapes[(size_t) i].name)
-                        return (float) i;
-                return jlimit (0.0f, (float) formants::numShapes, name.getFloatValue());
+                const int n = jlimit (1, numModes, t.trim().getIntValue());
+                return 0.5f * (float) (n - 1);
             });
 
         auto field = std::make_unique<AudioProcessorParameterGroup> ("shape", "Shape", "|",
             std::make_unique<AudioParameterInt> (ParameterID { id::density, v }, "Density", 1, 16, 8),
-            floatParam (FP::Vowel, vowelText),
+            floatParam (FP::Vowel, modeText),
             floatParam (FP::Shift),
             floatParam (FP::Stretch),
             floatParam (FP::Resonance),
@@ -169,6 +163,7 @@ namespace flux::params
             layout.add (std::make_unique<AudioProcessorParameterGroup> ("slot" + String (i + 1), n, "|",
                 choice (id::slot (i, "Source"), n + " Source", names (modSourceNames), 0),
                 choice (id::slot (i, "Target"), n + " Target", names (modTargetNames), 0),
+                toggle (id::slot (i, "On"), n + " On", true),
                 std::make_unique<AudioParameterFloat> (ParameterID { id::slot (i, "Depth"), v }, n + " Depth", depthRange, 0.0f, depthText)));
         }
 

@@ -27,7 +27,7 @@ enum class ModTarget : int
     Count
 };
 inline constexpr const char* modTargetNames[] = {
-    "None", "Vowel (cells)", "Resonance (cells)", "Scatter (cells)",
+    "None", "Mode (cells)", "Resonance (cells)", "Scatter (cells)",
     "Shift", "Stretch", "Feedback", "Damping",
     "Flux", "Wander", "Rasp",
     "Drive", "Mix", "Output",
@@ -80,6 +80,7 @@ struct SlotSettings
     ModSource source = ModSource::None;
     ModTarget target = ModTarget::None;
     float depth = 0.0f;
+    bool on = true;   // a connection can be switched off without losing it
 };
 
 struct ModSettings
@@ -150,7 +151,7 @@ public:
 
         for (const auto& slot : settings.slots)
         {
-            if (slot.source == ModSource::None || slot.target == ModTarget::None || slot.depth == 0.0f)
+            if (! slot.on || slot.source == ModSource::None || slot.target == ModTarget::None || slot.depth == 0.0f)
                 continue;
 
             const float amount = slot.depth * source (slot.source);

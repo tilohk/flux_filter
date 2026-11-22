@@ -69,7 +69,7 @@ public:
                         const float t = (float) i / (float) steps;    // 0 at the lower pole, 1 at the upper one
                         const float psi = delta * t;
                         const float sway = 1.0f + (0.04f + 0.2f * v) * std::sin (pi * t)
-                                                * std::sin (3.0f * pi * t - time * (1.5f + 3.0f * v) + arcSeed) * frac;
+                                                * std::sin (3.0f * pi * t - swayPhase + arcSeed) * frac;
                         // A broad arc: it rises quickly from the pole and stays near its full height
                         // over most of the way (a flattened sine), so the bulges are wide, not pinched.
                         const float r = R + (L - R) * std::pow (std::sin (pi * t), 0.35f) * sway;
@@ -82,10 +82,9 @@ public:
                     strokeBoth (line, lineAlpha * 0.45f, 2.0f + 2.0f * v);
 
                     // Light pulses flowing upwards: positions run from the bottom pole (0) to the top (2).
-                    const float speed = 0.15f + 0.6f * v;
                     for (int n = 0; n < 2; ++n)
                     {
-                        const float pos = std::fmod (time * speed + 0.5f * (float) n + 0.13f * seed, 1.0f) * 2.0f - (float) lobe;
+                        const float pos = std::fmod (pulsePhase + 0.5f * (float) n + 0.13f * seed, 1.0f) * 2.0f - (float) lobe;
                         const float half = 0.18f;
                         const float t0 = pos - half, t1 = pos + half;
                         if (t1 <= 0.0f || t0 >= 1.0f) continue;
@@ -109,13 +108,18 @@ private:
         const auto target = juce::jlimit (0.0f, 1.0f, (float) slider.valueToProportionOfLength (slider.getValue())
                                                        + (float) slider.getProperties().getWithDefault (liveOffsetProperty, 0.0f));
         level += (target - level) * 0.15f;
-        time += dt * (0.4f + 1.6f * level);
+        // Every moving part integrates its own speed, so a change of Flux (turning the knob or
+        // modulation) changes how fast things move from now on, without jumping or racing.
+        constexpr float twoPi = juce::MathConstants<float>::twoPi;
+        time = std::fmod (time + dt * (0.4f + 1.6f * level), twoPi / 0.9f);   // only used as sin (0.9 time)
+        swayPhase = std::fmod (swayPhase + dt * (1.5f + 3.0f * level), twoPi);
+        pulsePhase = std::fmod (pulsePhase + dt * (0.15f + 0.6f * level), 1.0f);
         repaint (juce::Rectangle<float> (centre, centre).expanded (ringR * 1.35f + 8.0f).toNearestInt());
     }
 
     juce::Slider& slider;
     juce::Point<float> centre;
-    float ringR = 0.0f, level = 0.0f, time = 0.0f;
+    float ringR = 0.0f, level = 0.0f, time = 0.0f, swayPhase = 0.0f, pulsePhase = 0.0f;
 };
 
 // The heart of the plugin: one big Flux knob that feeds the field with energy and movement, from a
@@ -266,11 +270,14 @@ public:
             b.setButtonText (text);
             b.setClickingTogglesState (true);
             b.setTooltip (tip);
+            b.setColour (juce::TextButton::buttonOnColourId, colours::text);   // the output section is white
             addAndMakeVisible (b);
             att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (ctx.state, paramId, b);
         };
         pill (autoGain, "AUTO", params::id::autoGain, "Auto Gain: turns the filtered signal down when resonance, drive or feedback make it louder than the input (never up)", autoGainAtt);
         pill (limiter, "LIMIT", params::id::limiter, "Soft safety limiter at 0 dBFS", limiterAtt);
+        for (auto* k : { &mix, &output })
+            k->getSlider().setColour (juce::Slider::rotarySliderFillColourId, colours::text);
         for (auto* c : std::initializer_list<juce::Component*> { &meter, &mix, &output })
             addAndMakeVisible (c);
     }
@@ -349,12 +356,12 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (10, 0).withTrimmedTop (30);
+        // Two LFOs: at most two connections per knob. The panel is split into two equal halves,
+        // each row centred in its own.
+        auto r = getLocalBounds().reduced (10, 0).withTrimmedTop (30).withTrimmedBottom (8);
+        const int halfH = r.getHeight() / 2;
         for (auto& row : rows)
-        {
-            row->setBounds (r.removeFromTop (38));
-            r.removeFromTop (4);
-        }
+            row->setBounds (r.removeFromTop (halfH).withSizeKeepingCentre (r.getWidth(), juce::jmin (halfH, 48)));
     }
 
 private:
@@ -374,15 +381,30 @@ private:
             attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (ctx.state, ctx.depthParamId (slot), depth);
             remove.onClick = [this] { auto& cx = ctx; const int s = slot; juce::MessageManager::callAsync ([&cx, s] { cx.disconnect (s); }); };
             addAndMakeVisible (remove);
+            onSwitch.onClick = [this] { ctx.setSlotOn (slot, ! ctx.slotOn (slot)); update(); };
+            addAndMakeVisible (onSwitch);
+            update();
+        }
+
+        // Follows the on/off switch (also when the host automates it).
+        void update()
+        {
+            const bool on = ctx.slotOn (slot);
+            if (on == onSwitch.on && initialised) return;
+            initialised = true;
+            onSwitch.on = on;
+            onSwitch.setTooltip (onSwitch.on ? "Connection on: click to switch it off" : "Connection off: click to switch it on");
+            depth.setAlpha (onSwitch.on ? 1.0f : 0.4f);
+            onSwitch.repaint();
+            repaint();
         }
 
         // Top line: source and depth value; under it the depth bar across the whole row.
         void paint (juce::Graphics& g) override
         {
             auto line = getLocalBounds().removeFromTop (labelH).withTrimmedRight (26);
-            g.setColour (colours::source (source));
-            g.fillEllipse (line.removeFromLeft (14).withSizeKeepingCentre (9, 9).toFloat());
-            g.setColour (colours::text);
+            line.removeFromLeft (16);   // the on/off switch
+            g.setColour (onSwitch.on ? colours::text : colours::dim);
             g.setFont (juce::FontOptions (12.0f));
             g.drawText (modSourceNames[(int) source], line.withTrimmedLeft (4), juce::Justification::centredLeft);
             g.drawText (depth.getTextFromValue (depth.getValue()), line, juce::Justification::centredRight);
@@ -392,16 +414,34 @@ private:
         {
             auto r = getLocalBounds();
             remove.setBounds (r.removeFromRight (22).removeFromTop (labelH));
+            onSwitch.setBounds (r.getX(), r.getY(), 16, labelH);
             r.removeFromTop (labelH);
             depth.setBounds (r.withTrimmedRight (4).withTrimmedLeft (2));
         }
 
     private:
-        static constexpr int labelH = 16;
+        static constexpr int labelH = 18;
         ModContext& ctx;
         int slot;
         ModSource source;
+        // The source's coloured dot doubles as the connection's on/off switch.
+        struct OnSwitch : public juce::Button
+        {
+            explicit OnSwitch (juce::Colour c) : juce::Button ("on"), colour (c) {}
+            void paintButton (juce::Graphics& g, bool over, bool) override
+            {
+                const auto d = getLocalBounds().toFloat().withSizeKeepingCentre (10.0f, 10.0f).withX (1.0f);
+                g.setColour (colour.withMultipliedAlpha (over ? 1.0f : 0.9f));
+                if (on) g.fillEllipse (d);
+                else    g.drawEllipse (d.reduced (0.75f), 1.5f);
+            }
+            juce::Colour colour;
+            bool on = true;
+        };
+
         juce::Slider depth;
+        OnSwitch onSwitch { colours::source (source) };
+        bool initialised = false;
         CrossButton remove;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
@@ -413,6 +453,7 @@ private:
         juce::String sig = sel;
         const auto list = ctx.connectionsFor (t);
         for (const auto& c : list) sig << "|" << c.slot << ":" << (int) c.source;
+        for (auto& row : rows) row->update();   // on/off can be automated
 
         if (sig != signature)
         {

@@ -54,7 +54,7 @@ enum class FP : int
 inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
 {
     static const std::array<FloatSpec, (size_t) FP::Count> table {{
-        { "vowel",      "Vowel",           0.0f,  9.0f,     0.0f },                         // ring position, see dsp/FormantTable.h
+        { "mode",       "Mode",            0.0f,  9.0f,     0.0f },                         // ring position (throat shape), shown as modes 1-18; see dsp/FormantTable.h
         { "shift",      "Shift",           -2.0f, 2.0f,     0.0f,   0.0f,   0.0f,  "oct" }, // moves every formant; + = higher
         { "stretch",    "Stretch",         -1.0f, 1.0f,     0.0f },                          // formant spacing: - = squeezed, + = apart
         { "resonance",  "Resonance",       0.0f,  1.0f,     0.6f },

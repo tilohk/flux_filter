@@ -31,8 +31,8 @@ namespace colours
     {
         switch (s)
         {
-            case ModSource::Lfo1:  return juce::Colour (0xff4d8dff);   // blue
-            case ModSource::Lfo2:  return juce::Colour (0xffff4f6e);   // red
+            case ModSource::Lfo1:  return juce::Colour (0xffa99ae0);   // dusty lavender
+            case ModSource::Lfo2:  return juce::Colour (0xffe0857a);   // clay rose
             case ModSource::None:
             case ModSource::Count: break;
         }
@@ -43,7 +43,7 @@ namespace colours
 // Slider properties understood by the look and feel.
 inline const juce::Identifier heroKnobProperty ("fluxHero");
 inline const juce::Identifier stepsProperty ("steps");
-inline const juce::Identifier liveOffsetProperty ("liveOffset");   // hero knob: current modulation offset (0..1 space)   // number of positions: draws a marker per step
+inline const juce::Identifier liveOffsetProperty ("liveOffset");   // current modulation offset (0..1 space): the value arc follows it   // number of positions: draws a marker per step
 
 class FluxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -133,9 +133,9 @@ public:
 
         const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;   // fills from the middle
         const float fromPos = bipolar ? (float) slider.valueToProportionOfLength (0.0) : 0.0f;
-        // The hero knob's value arc and lamp show where the modulation has it right now; its
-        // pointer stays on the knob's own setting.
-        const float livePos = hero ? juce::jlimit (0.0f, 1.0f, pos + (float) slider.getProperties().getWithDefault (liveOffsetProperty, 0.0f)) : pos;
+        // The value arc (and the hero knob's lamp) shows where the modulation has the knob right
+        // now; the pointer stays on the knob's own setting.
+        const float livePos = juce::jlimit (0.0f, 1.0f, pos + (float) slider.getProperties().getWithDefault (liveOffsetProperty, 0.0f));
         const float a0 = startAngle + fromPos * (endAngle - startAngle);
         const float a1 = startAngle + pos * (endAngle - startAngle);
         const float aLive = startAngle + livePos * (endAngle - startAngle);

@@ -140,34 +140,24 @@ public:
         }
         if (connections.empty()) return;
 
+        // One small dot per modulation source, in its colour, at the bottom of the knob (in the
+        // gap of the value ring, above the value). The value arc itself moves with the modulation.
         const auto area = getLookAndFeel().getSliderLayout (slider).sliderBounds + slider.getPosition();
         const auto knob = FluxLookAndFeel::knobBounds (area);
-        const auto centre = knob.getCentre();
-        const auto rp = slider.getRotaryParameters();
-        const float base = (float) slider.valueToProportionOfLength (slider.getValue());
-        auto angleAt = [&] (float p) { return rp.startAngleRadians + juce::jlimit (0.0f, 1.0f, p) * (rp.endAngleRadians - rp.startAngleRadians); };
-        const float r0 = knob.getWidth() * 0.5f + 2.5f;
         const auto highlight = ctx.getHighlighted();
-
-        for (size_t i = 0; i < connections.size() && i < 3; ++i)
+        const float dot = size == KnobSize::Hero ? 6.0f : 5.0f, spacing = dot + 3.0f;
+        const float y = knob.getBottom() - dot * 0.5f + (size == KnobSize::Hero ? 0.0f : 3.0f);
+        const int n = std::min ((int) connections.size(), 3);
+        for (int i = 0; i < n; ++i)
         {
-            const auto& c = connections[i];
-            const float r = r0 + 2.6f * (float) i;
-            // Bipolar sources swing both ways around the knob value, unipolar ones only towards depth.
-            const float a0 = angleAt (c.bipolar ? base - c.depth : base), a1 = angleAt (base + c.depth);
-            if (std::abs (a1 - a0) < 0.01f) continue;
-            juce::Path arc;
-            arc.addCentredArc (centre.x, centre.y, r, r, 0.0f, juce::jmin (a0, a1), juce::jmax (a0, a1), true);
+            const auto& c = connections[(size_t) i];
+            const float x = knob.getCentreX() + ((float) i - 0.5f * (float) (n - 1)) * spacing;
             const bool dimmed = highlight != ModSource::None && highlight != c.source;
-            g.setColour (colours::source (c.source).withAlpha (dimmed ? 0.25f : 0.95f));
-            g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            const auto r = juce::Rectangle<float> (dot, dot).withCentre ({ x, y });
+            g.setColour (colours::source (c.source).withAlpha (dimmed ? 0.3f : 1.0f));
+            if (c.on) g.fillEllipse (r);
+            else      g.drawEllipse (r.reduced (0.5f), 1.0f);   // switched off: an empty ring
         }
-
-        // Live position: where the modulation has the knob right now.
-        const float live = angleAt (base + liveOffset);
-        const float rl = r0 + 1.0f;
-        g.setColour (colours::text);
-        g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre ({ centre.x + rl * std::sin (live), centre.y - rl * std::cos (live) }));
     }
 
     void mouseDown (const juce::MouseEvent&) override
@@ -200,17 +190,15 @@ private:
         bool changed = force || list.size() != connections.size() || ctx.getVersion() != seenVersion
                     || std::abs (live - liveOffset) > 0.002f;
         for (size_t i = 0; ! changed && i < list.size(); ++i)
-            changed = list[i].source != connections[i].source || list[i].bipolar != connections[i].bipolar
+            changed = list[i].source != connections[i].source || list[i].bipolar != connections[i].bipolar || list[i].on != connections[i].on
                    || std::abs (list[i].depth - connections[i].depth) > 1.0e-4f;
         if (! changed) return;
         connections = std::move (list);
         liveOffset = live;
         seenVersion = ctx.getVersion();
-        if (size == KnobSize::Hero)   // the big knob draws its value arc at the modulated value
-        {
-            slider.getProperties().set (liveOffsetProperty, connections.empty() ? 0.0f : liveOffset);
-            slider.repaint();
-        }
+        // The value arc is drawn at the modulated value.
+        slider.getProperties().set (liveOffsetProperty, connections.empty() ? 0.0f : liveOffset);
+        slider.repaint();
         repaint();
     }
 
