@@ -1,0 +1,124 @@
+name: Build
+
+# Builds and tests FluxFilter on macOS, Windows and Linux.
+# Pushing a tag "vX.Y.Z" also creates a draft GitHub release with the zipped plug-ins. Publish the
+# draft to make it "latest": packaging/install-macos.sh downloads the latest release.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-14
+            cmake_args: -G Ninja "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          - name: Windows
+            os: windows-2022
+            cmake_args: -G "Visual Studio 17 2022" -A x64
+          - name: Linux
+            os: ubuntu-22.04
+            cmake_args: -G Ninja
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev ladspa-sdk \
+            libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev \
+            mesa-common-dev xvfb
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLUX_COPY_PLUGIN=OFF ${{ matrix.cmake_args }}
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel --target FluxFilter_All FluxFieldTest FluxModTest FluxPresetCheck
+
+      - name: Test
+        shell: bash
+        working-directory: build
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ctest -C Release --output-on-failure
+          else
+            ctest -C Release --output-on-failure
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project(FluxFilter VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          art=build/FluxFilter_artefacts/Release
+          out="flux_filter-${version}-${{ matrix.name }}"
+          mkdir -p "dist/$out"
+          cp -R "$art/VST3/flux_filter.vst3" "dist/$out/"
+          case "$RUNNER_OS" in
+            macOS)
+              cp -R "$art/AU/flux_filter.component" "dist/$out/"
+              cp -R "$art/Standalone/flux_filter.app" "dist/$out/"
+              # Not notarised: sign ad hoc so the bundles at least carry a valid signature.
+              for b in "dist/$out"/*; do codesign --force --deep --sign - "$b"; done ;;
+            Windows)
+              cp "$art/Standalone/flux_filter.exe" "dist/$out/" ;;
+            Linux)
+              cp -R "$art/LV2/flux_filter.lv2" "dist/$out/"
+              cp "$art/Standalone/flux_filter" "dist/$out/" ;;
+          esac
+          cp README.md CHANGELOG.md LICENSE "dist/$out/"
+          sed "s/@VERSION@/$version/" packaging/INSTALL.txt > "dist/$out/INSTALL.txt"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp packaging/install-macos.sh "dist/$out/" && chmod +x "dist/$out/install-macos.sh"
+          fi
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then 7z a -tzip "$out.zip" "$out" > /dev/null
+          else ditto -c -k --keepParent "$out" "$out.zip" 2>/dev/null || zip -qry "$out.zip" "$out"; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flux_filter-${{ matrix.name }}
+          path: dist/*.zip
+
+  release:
+    name: Draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: notes.md
+          files: dist/*.zip

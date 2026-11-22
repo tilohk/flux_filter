@@ -1,0 +1,48 @@
+flux_filter @VERSION@ - a throat made of living cells
+https://github.com/tilohk/flux_filter
+
+Licensed under the GNU AGPL v3 (see LICENSE). Built with JUCE (AGPLv3).
+
+INSTALL
+=======
+
+macOS
+-----
+  Easiest: open Terminal (Applications > Utilities), type "bash " (with a space),
+  drag install-macos.sh from this folder into the window and press Enter.
+  It copies the plug-ins into your user plug-in folders, unblocks them and puts
+  the standalone app into Applications.
+
+  Or install without downloading the zip at all:
+
+    curl -fsSL https://raw.githubusercontent.com/tilohk/flux_filter/main/packaging/install-macos.sh | bash
+
+  By hand:
+    VST3:       copy flux_filter.vst3      to ~/Library/Audio/Plug-Ins/VST3/
+    AU:         copy flux_filter.component to ~/Library/Audio/Plug-Ins/Components/
+    Standalone: copy flux_filter.app       to /Applications/
+  (~/Library is the Library folder in your home folder, not /Library.)
+  The plug-in is not notarized by Apple, so then run this once in Terminal,
+  otherwise macOS blocks it and your DAW may hang while scanning plug-ins:
+
+    xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/flux_filter.vst3 ~/Library/Audio/Plug-Ins/Components/flux_filter.component /Applications/flux_filter.app
+
+  Ableton Live: Settings > Plug-Ins, hold Option and click Rescan. Option also
+  retries plug-ins that failed before (e.g. scanned while still blocked).
+
+  Universal build: Apple Silicon and Intel, macOS 10.13 or newer.
+
+Windows
+-------
+  VST3:       copy the folder flux_filter.vst3 to C:\Program Files\Common Files\VST3\
+  Standalone: flux_filter.exe runs from anywhere.
+  Windows 10/11, 64-bit.
+
+Linux
+-----
+  VST3:       copy flux_filter.vst3 to ~/.vst3/
+  LV2:        copy flux_filter.lv2  to ~/.lv2/
+  Standalone: run flux_filter from anywhere.
+  64-bit x86, glibc 2.35 or newer (Ubuntu 22.04+, Fedora 36+, ...).
+
+Then rescan plug-ins in your DAW (restart it if it was open).

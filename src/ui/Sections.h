@@ -72,7 +72,7 @@ public:
                                                 * std::sin (3.0f * pi * t - swayPhase + arcSeed) * frac;
                         // A broad arc: it rises quickly from the pole and stays near its full height
                         // over most of the way (a flattened sine), so the bulges are wide, not pinched.
-                        const float r = R + (L - R) * std::pow (std::sin (pi * t), 0.35f) * sway;
+                        const float r = R + (L - R) * std::pow (std::max (0.0f, std::sin (pi * t)), 0.35f) * sway;
                         const float a = fromAngle - (float) side * psi;   // towards the top
                         pts[(size_t) i] = { centre.x + r * std::sin (a), centre.y - r * std::cos (a) };
                     }
