@@ -34,6 +34,7 @@ public:
             return a;
         };
         constexpr float clean = 0, warm = 1, broken = 2;                 // Character
+        constexpr float boost = 0;                                       // Cut switch off: the cells are peaks (default: cut, full wet)
         [[maybe_unused]] constexpr float a = 0, e = 1, i = 2, o = 3, u = 4, nasal = 5, growl = 6, schwa = 7, whisper = 8;   // Vowel ring
         constexpr float div8 = 10, bar1 = 2;                             // lfoDivisions
         constexpr float lfoSquare = 3, lfoRandom = 4;
@@ -43,66 +44,86 @@ public:
         static const std::vector<Factory> list {
             { "Init", {} },
 
+            // --- Cut: the cells carve notches ---
+
+            // A few wide notches roaming through the sound: a phaser with a throat.
+            { "Phase Ghost", { { "density", 6 }, { "mode", a }, { "resonance", 0.7f },
+                               { "flux", 0.6f }, { "wander", 0.8f } } },
+
+            // The vowel taken out instead of put in: the sound speaks backwards.
+            { "Hollow Vowel", { { "density", 12 }, { "mode", o }, { "resonance", 0.6f },
+                                { "flux", 0.35f }, { "wander", 0.5f } } },
+
+            // Sixteen narrow notches spread wide and evenly: a slowly breathing comb.
+            { "Comb Garden", { { "density", 16 }, { "mode", schwa }, { "stretch", 1.0f }, { "resonance", 0.85f },
+                               { "flux", 0.2f }, { "wander", 0.3f } } },
+
+            // Scattered deep notches flickering in and out, feedback pushing the rest forward.
+            { "Notch Swarm", { { "density", 16 }, { "mode", e }, { "resonance", 0.9f }, { "scatter", 0.6f },
+                               { "flux", 0.9f }, { "wander", 0.4f }, { "feedback", 0.5f }, { "damping", 0.5f } } },
+
+            // --- Boost: the cells sing ---
+
             // A calm throat that breathes on its own: slow drift and a little life.
-            { "Breathing Throat", { { "density", 9 }, { "mode", a }, { "resonance", 0.6f },
+            { "Breathing Throat", { { "cut", boost }, { "mix", 0.5f }, { "density", 9 }, { "mode", a }, { "resonance", 0.6f },
                                     { "flux", 0.35f }, { "wander", 0.6f } } },
 
             // Airy high formants, many cells, lively.
-            { "Whisper Choir", { { "output", 1 }, { "density", 16 }, { "mode", whisper }, { "resonance", 0.7f }, { "scatter", 0.15f },
+            { "Whisper Choir", { { "cut", boost }, { "mix", 0.5f }, { "output", 1 }, { "density", 16 }, { "mode", whisper }, { "resonance", 0.7f }, { "scatter", 0.15f },
                                  { "flux", 0.6f }, { "wander", 0.5f } } },
 
             // Big, low, rough: the growl shape with full rasp and some drive.
-            { "Growling Beast", { { "density", 9 }, { "mode", growl }, { "shift", -1.2f }, { "resonance", 0.75f },
+            { "Growling Beast", { { "cut", boost }, { "mix", 0.5f }, { "density", 9 }, { "mode", growl }, { "shift", -1.2f }, { "resonance", 0.75f },
                                   { "flux", 0.7f }, { "rasp", 0.9f }, { "wander", 0.4f },
                                   { "character", warm }, { "drive", 6 } } },
 
             // Everything on: short lives, cells exciting each other, fast drift. Made for drums.
-            { "Feeding Swarm", { { "density", 16 }, { "mode", schwa }, { "resonance", 0.8f }, { "scatter", 0.5f },
+            { "Feeding Swarm", { { "cut", boost }, { "mix", 0.5f }, { "density", 16 }, { "mode", schwa }, { "resonance", 0.8f }, { "scatter", 0.5f },
                                  { "flux", 0.9f }, { "wander", 0.3f } } },
 
             // Scattered cells at full Flux: granular flicker.
-            { "Flicker Grain", { { "output", 1 }, { "density", 16 }, { "mode", e }, { "resonance", 0.85f }, { "scatter", 0.7f },
+            { "Flicker Grain", { { "cut", boost }, { "mix", 0.5f }, { "output", 1 }, { "density", 16 }, { "mode", e }, { "resonance", 0.85f }, { "scatter", 0.7f },
                                  { "flux", 1.0f }, { "wander", 0.4f } } },
 
             // Narrow formants ringing into each other through the feedback loop.
-            { "Singing Stones", { { "output", 2 }, { "density", 12 }, { "mode", o }, { "shift", -0.5f }, { "resonance", 0.92f },
+            { "Singing Stones", { { "cut", boost }, { "mix", 0.5f }, { "output", 2 }, { "density", 12 }, { "mode", o }, { "shift", -0.5f }, { "resonance", 0.92f },
                                   { "flux", 0.45f }, { "wander", 0.5f },
                                   { "feedback", 0.6f }, { "damping", 0.5f } } },
 
             // A slowly moving vowel under the dry sound.
-            { "Vowel Shadow", { { "density", 12 }, { "mode", schwa }, { "resonance", 0.85f },
+            { "Vowel Shadow", { { "cut", boost }, { "mix", 0.5f }, { "density", 12 }, { "mode", schwa }, { "resonance", 0.85f },
                                 { "flux", 0.35f }, { "wander", 0.5f }} },
 
             // A huge, dark throat that moves very slowly.
-            { "Cave Mouth", { { "output", 2 }, { "density", 6 }, { "mode", u }, { "shift", -2.0f }, { "resonance", 0.7f },
+            { "Cave Mouth", { { "cut", boost }, { "mix", 0.5f }, { "output", 2 }, { "density", 6 }, { "mode", u }, { "shift", -2.0f }, { "resonance", 0.7f },
                               { "flux", 0.3f }, { "wander", 0.9f },
                               { "feedback", 0.4f }, { "damping", 0.7f }, { "character", warm } } },
 
             // A tiny, nervous throat.
-            { "Tiny Creature", { { "output", 2 }, { "density", 9 }, { "mode", i }, { "shift", 1.8f }, { "resonance", 0.7f },
+            { "Tiny Creature", { { "cut", boost }, { "mix", 0.5f }, { "output", 2 }, { "density", 9 }, { "mode", i }, { "shift", 1.8f }, { "resonance", 0.7f },
                                  { "flux", 0.85f }, { "rasp", 0.5f }, { "wander", 0.7f } } },
 
             // Long swells through the whole vowel ring, an LFO absorbed loosely by the cells.
-            { "Slow Tide", join ({ { "density", 12 }, { "mode", o }, { "resonance", 0.55f }, { "scatter", 0.1f },
+            { "Slow Tide", join ({ { "cut", boost }, { "mix", 0.5f }, { "density", 12 }, { "mode", o }, { "resonance", 0.55f }, { "scatter", 0.1f },
                                    { "flux", 0.5f }, { "wander", 1.0f },
                                    { lfo (0, "Rate"), 0.05f }, { lfo (0, "Flux"), 1.0f }, { "character", warm } },
                                  slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.1f)) },
 
             // Broken character, nasal throat, rasp and a tempo-synced square on Resonance.
-            { "Broken Radio", join ({ { "character", broken }, { "density", 6 }, { "mode", nasal }, { "shift", 0.5f },
+            { "Broken Radio", join ({ { "cut", boost }, { "mix", 0.5f }, { "character", broken }, { "density", 6 }, { "mode", nasal }, { "shift", 0.5f },
                                       { "resonance", 0.8f }, { "rasp", 0.6f }, { "drive", 12 }, { "flux", 0.5f },
                                       { lfo (1, "Sync"), 1 }, { lfo (1, "Division"), div8 }, { lfo (1, "Shape"), lfoSquare } },
                                     slot (0, ModSource::Lfo2, ModTarget::Resonance, 0.2f)) },
 
             // Modes stepping in time: a synced random LFO on Mode, half absorbed.
-            { "Vowel Sequencer", join ({ { "density", 9 }, { "resonance", 0.75f }, { "character", clean },
+            { "Vowel Sequencer", join ({ { "cut", boost }, { "mix", 0.5f }, { "density", 9 }, { "resonance", 0.75f }, { "character", clean },
                                          { "flux", 0.3f }, { "wander", 0.2f },
                                          { lfo (0, "Sync"), 1 }, { lfo (0, "Division"), div8 }, { lfo (0, "Shape"), lfoRandom },
                                          { lfo (0, "Flux"), 0.5f } },
                                        slot (0, ModSource::Lfo1, ModTarget::Vowel, 0.35f)) },
 
             // Self-oscillating drone, slowly alive.
-            { "Drone Organism", join ({ { "density", 12 }, { "mode", schwa }, { "shift", -0.8f }, { "resonance", 0.9f },
+            { "Drone Organism", join ({ { "cut", boost }, { "mix", 0.5f }, { "density", 12 }, { "mode", schwa }, { "shift", -0.8f }, { "resonance", 0.9f },
                                         { "feedback", 0.93f }, { "damping", 0.4f },
                                         { "flux", 0.3f }, { "wander", 0.6f },
                                         { lfo (1, "Sync"), 1 }, { lfo (1, "Division"), bar1 } },

@@ -9,8 +9,9 @@ namespace flux::ui
 {
 
 // Live picture of the field: one line, the filter's combined response, which is what the input
-// actually goes through: every living cell summed (with their phases), the feedback loop, the
-// makeup / auto gain and the dry/wet mix. As cells drift, are born and die, the line breathes.
+// actually goes through: every living cell summed (with their phases), or in cut mode every
+// cell's notch multiplied, then the feedback loop, the makeup / auto gain and the dry/wet mix.
+// Boost fills under the line (peaks rise from below); cut shades what is removed, hanging from 0 dB. As cells drift, are born and die, the line breathes.
 // Its colour follows Flux (including modulation): sage at 0, the flux amber at 100.
 // Behind it: the spectrum of the filtered output (grey).
 class FieldView : public juce::Component, private juce::Timer
@@ -63,6 +64,7 @@ private:
         const float sr = processor.getSampleRateForUi();
         const float dampCoef = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * snap.dampHz.load (relaxed) / sr);
         hasResponse = cells > 0;
+        cutMode = snap.cut.load (relaxed);
         const float flux = juce::jlimit (0.0f, 1.0f, snap.flux.load (relaxed));
         fluxLevel += (flux - fluxLevel) * 0.2f;
 
@@ -70,7 +72,9 @@ private:
         for (int i = 0; i < curvePoints; ++i)
         {
             const float hz = curveHz[(size_t) i];
-            const auto h = norm * FluxField::response (hz, cells, freq.data(), q.data(), [&] (int c) { return level[(size_t) c]; });
+            const auto lv = [&] (int c) { return level[(size_t) c]; };
+            const auto h = cutMode ? FluxField::cutResponse (hz, cells, freq.data(), q.data(), lv)
+                                   : norm * FluxField::response (hz, cells, freq.data(), q.data(), lv);
             // Feedback: the wet signal goes back in through the damping lowpass (one pole):
             // wet = H x / (1 - fb D H). Near self-oscillation the saturation holds it; cap the display at +20 dB.
             std::complex<float> wet = h;
@@ -86,20 +90,22 @@ private:
             rawPower[(size_t) i] = std::norm (total);
         }
 
-        // Round the tips: average the power over about 1/5 octave (a small bell), so narrow
-        // resonances read as soft hills rather than needles. Then ease over time.
+        // Round the tips: average over about 1/5 octave (a small bell), so narrow resonances read
+        // as soft hills rather than needles. Then ease over time.
         constexpr int half = 4;
         constexpr float bell[2 * half + 1] = { 0.03f, 0.08f, 0.15f, 0.2f, 0.24f, 0.2f, 0.15f, 0.08f, 0.03f };
         for (int i = 0; i < curvePoints; ++i)
         {
+            // Cut mode averages in dB instead: averaged power would fill the notches in.
             float p = 0.0f, w = 0.0f;
             for (int k = -half; k <= half; ++k)
             {
                 const int j = juce::jlimit (0, curvePoints - 1, i + k);
-                p += bell[k + half] * rawPower[(size_t) j];
+                const float raw = rawPower[(size_t) j];
+                p += bell[k + half] * (cutMode ? 10.0f * std::log10 (raw + 1.0e-12f) : raw);
                 w += bell[k + half];
             }
-            const float db = 10.0f * std::log10 (p / w + 1.0e-12f);
+            const float db = cutMode ? p / w : 10.0f * std::log10 (p / w + 1.0e-12f);
             auto& d = responseDb[(size_t) i];
             d += (db - d) * 0.6f;   // a touch of easing so the 30 Hz frames don't flicker
         }
@@ -124,14 +130,24 @@ private:
         }
         line.lineTo (pts.back());
 
-        juce::Path fill (line);
-        fill.lineTo (plot.getRight(), plot.getBottom());
-        fill.lineTo (plot.getX(), plot.getBottom());
-        fill.closeSubPath();
-
         const auto colour = colours::channelL.interpolatedWith (colours::flux, fluxLevel);
-        const float top = yForDb (plot, topDb);
-        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.30f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
+        juce::Path fill (line);
+        if (cutMode)
+        {
+            // What the cells take away: between the 0 dB line and the curve, strongest at the top.
+            fill.lineTo (plot.getRight(), zeroY);
+            fill.lineTo (plot.getX(), zeroY);
+            fill.closeSubPath();
+            g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.28f), 0.0f, zeroY, colour.withAlpha (0.04f), 0.0f, plot.getBottom(), false));
+        }
+        else
+        {
+            fill.lineTo (plot.getRight(), plot.getBottom());
+            fill.lineTo (plot.getX(), plot.getBottom());
+            fill.closeSubPath();
+            const float top = yForDb (plot, topDb);
+            g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.30f), 0.0f, top, colour.withAlpha (0.0f), 0.0f, plot.getBottom(), false));
+        }
         g.fillPath (fill);
 
         g.setColour (colour.withAlpha (0.95f));
@@ -286,7 +302,7 @@ private:
     std::array<float, curvePoints> responseDb = [] { std::array<float, curvePoints> a {}; a.fill (bottomDb); return a; }();
     float fluxLevel = 0.0f;   // eased, for the line's colour
     int writePos = 0;
-    bool hasSignal = false, hasResponse = false;
+    bool hasSignal = false, hasResponse = false, cutMode = false;
 
     FluxFilterAudioProcessor& processor;
 };

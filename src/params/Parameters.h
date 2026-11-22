@@ -14,6 +14,7 @@ namespace flux::params
 {
     namespace id
     {
+        inline constexpr auto cut       = "cut";        // cells cut their bands (on) or boost them (off)
         inline constexpr auto density   = "density";
         inline constexpr auto character = "character";
         inline constexpr auto autoGain  = "autoGain";
@@ -107,6 +108,9 @@ namespace flux::params
             });
 
         auto field = std::make_unique<AudioProcessorParameterGroup> ("shape", "Shape", "|",
+            std::make_unique<AudioParameterBool> (ParameterID { id::cut, v }, "Cut", true, AudioParameterBoolAttributes()
+                .withStringFromValueFunction ([] (bool on, int) { return on ? String ("Cut") : String ("Boost"); })
+                .withValueFromStringFunction ([] (const String& t) { return ! t.trim().startsWithIgnoreCase ("b"); })),
             std::make_unique<AudioParameterInt> (ParameterID { id::density, v }, "Density", 1, 16, 8),
             floatParam (FP::Vowel, modeText),
             floatParam (FP::Shift),

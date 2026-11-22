@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "ui/CutSwitch.h"
 #include "ui/FieldView.h"
 #include "ui/FluxLookAndFeel.h"
 #include "ui/ModContext.h"
@@ -9,7 +10,7 @@
 #include "ui/Sections.h"
 #include "ui/SourceModules.h"
 
-// One panel: header · field display with output spectrum + Output · Cells | Flux | Character ·
+// One panel: header (Cut/Boost switch, presets) · field display with output spectrum + Output · Cells | Flux | Character ·
 // LFO 1-3 (drag their move icons onto knobs) + the selected knob's modulation.
 // The panel is laid out at a fixed design size and scaled as a whole when the window is resized.
 class FluxFilterAudioProcessorEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer
@@ -36,6 +37,7 @@ private:
         void resized() override;
         flux::ui::ModContext ctx;
     private:
+        flux::ui::CutSwitch cutSwitch;
         flux::ui::PresetBar presetBar;
         flux::ui::FieldView fieldView;
         flux::ui::ParamSection cells { "Shape", 3 }, character { "Character", 2 };

@@ -15,7 +15,7 @@ namespace
 
 // ---------------------------------------------------------------------------------------------
 FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
-    : ctx (p), presetBar (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
+    : ctx (p), cutSwitch (p.apvts), presetBar (p), fieldView (p), flux (ctx), output (ctx), modPanel (ctx)
 {
     cells.add (ctx, params::id::density, "Density");
     cells.add (ctx, id (FP::Vowel), "Mode");
@@ -32,7 +32,7 @@ FluxFilterAudioProcessorEditor::Panel::Panel (FluxFilterAudioProcessor& p)
     for (int i = 0; i < ModSettings::numLfos; ++i)
         addAndMakeVisible (*lfos.emplace_back (std::make_unique<LfoModule> (ctx, i)));
 
-    for (auto* c : std::initializer_list<juce::Component*> { &presetBar, &fieldView, &cells, &character, &flux, &output, &modPanel })
+    for (auto* c : std::initializer_list<juce::Component*> { &cutSwitch, &presetBar, &fieldView, &cells, &character, &flux, &output, &modPanel })
         addAndMakeVisible (c);
     addAndMakeVisible (aura);   // last: the magnetic field is drawn over the panels
 }
@@ -58,7 +58,8 @@ void FluxFilterAudioProcessorEditor::Panel::paint (juce::Graphics& g)
 void FluxFilterAudioProcessorEditor::Panel::resized()
 {
     auto r = getLocalBounds().reduced (margin, 0);
-    presetBar.setBounds (r.getX(), headerTop, 330, headerH);
+    cutSwitch.setBounds (r.getX(), headerTop, 120, headerH);
+    presetBar.setBounds (r.getX() + 120 + 14, headerTop, 330, headerH);
     r.removeFromTop (headerTop + headerH + gap);
     r.removeFromBottom (margin);
 

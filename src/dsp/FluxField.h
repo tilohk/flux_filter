@@ -19,6 +19,7 @@ enum class Character { Clean = 0, Warm, Broken };
 // Everything that shapes the field. Plain values, filled from the plugin parameters each block.
 struct FieldSettings
 {
+    bool  cut        = false;   // true: every cell cuts its band (notches in series); false: boosts it (peaks in parallel)
     int   density    = 8;       // number of active cells, 1..maxCells; also sets the number of formants
     float vowel      = 0.0f;    // ring position 0..9 through the throat shapes (dsp/FormantTable.h)
     float shiftOct   = 0.0f;    // moves every formant, -2..+2 octaves: + = higher
@@ -101,6 +102,7 @@ public:
     struct Snapshot
     {
         std::atomic<int> activeCells { 0 };
+        std::atomic<bool> cut { false };                          // cut mode: level is each cell's cut depth (0..1)
         std::array<std::atomic<float>, maxCells> freq {}, q {}, level {};   // level: gain × life, before the norm
         std::atomic<float> norm { 1.0f }, post { 1.0f };          // inside the feedback loop / after it (makeup × auto gain)
         std::atomic<float> feedback { 0.0f }, dampHz { 20000.0f }, mix { 1.0f };
@@ -265,13 +267,57 @@ private:
         return softClip (dampState[c]) * fbGain;
     }
 
+    // Rasp: amplitude jitter, and growl: every other cycle (rising zero crossings) is quieter,
+    // which adds the sub-octave of a rough, fry-like voice. y: the cell's output, last: its previous one.
+    float applyRasp (float y, float last, int ch, size_t ci) noexcept
+    {
+        if (! raspOn)
+            return y;
+        auto& r = raspState[(size_t) ch][ci];
+        if (last < 0.0f && y >= 0.0f)
+            r.oddCycle = ! r.oddCycle;
+        r.amp += r.ampStep;
+        return y * r.amp * (r.oddCycle ? growlLow : growlHigh);
+    }
+
     float processWet (float x, int ch) noexcept
     {
+        auto& prev = lastOut[(size_t) ch];
+        auto& acc = energyAcc[(size_t) ch];
+
+        // Cut: the cells sit in series and each removes its band from what it is given: two
+        // single-stage notches (exactly zero at the centre at full depth, see FluxCell::processCut)
+        // that leave the rest untouched. The cuts multiply, so the field never boosts,
+        // overlapping cells dig one deeper, wider trough, and a dying cell lets its band back in.
+        // The band output feeds life and coupling as in boost mode (a cell lives on, and eats, the
+        // sound in its band). No bleed: neighbours' signals added into a series chain would boost.
+        if (cutMode)
+        {
+            float s = x;
+            for (int c = 0; c < activeCells; ++c)
+            {
+                const auto ci = (size_t) c;
+                // Rasp shakes the depth (jitter, and every other cycle cut less: the growl).
+                float depth = cutStage[ci];
+                if (raspOn)
+                {
+                    auto& r = raspState[(size_t) ch][ci];
+                    r.amp += r.ampStep;
+                    depth = std::min (1.0f, depth * r.amp * (r.oddCycle ? growlLow : growlHigh));
+                }
+                float band;
+                s = cells[(size_t) ch][ci].processCut (s, depth, band);
+                if (raspOn && prev[ci] < 0.0f && band >= 0.0f)
+                    raspState[(size_t) ch][ci].oddCycle = ! raspState[(size_t) ch][ci].oddCycle;
+                prev[ci] = band;
+                acc[ci] += band * band;
+            }
+            return s;
+        }
+
         // Coupling, audio rate: each cell also hears its neighbours' last output (bleed), so a ringing
         // cell sets the cells next to it ringing, like sympathetic strings. The neighbour weights are
         // at most 1 per side, so the loop gain stays below 2 * bleed (< 0.5): it never runs away.
-        auto& prev = lastOut[(size_t) ch];
-        auto& acc = energyAcc[(size_t) ch];
         float sum = 0.0f, before = 0.0f;   // before: the previous cell's output from the last sample
         for (int c = 0; c < activeCells; ++c)
         {
@@ -280,17 +326,7 @@ private:
             if (bleed > 0.0f)
                 in += bleed * (bleedLeft[ci] * before + bleedRight[ci] * prev[ci + 1]);   // bleedRight is 0 for the last cell
             const float y = cells[(size_t) ch][ci].process (in);
-            // Rasp: amplitude jitter, and growl: every other cycle (rising zero crossings) is
-            // quieter, which adds the sub-octave of a rough, fry-like voice.
-            float heard = y;
-            if (raspOn)
-            {
-                auto& r = raspState[(size_t) ch][ci];
-                if (prev[ci] < 0.0f && y >= 0.0f)
-                    r.oddCycle = ! r.oddCycle;
-                r.amp += r.ampStep;
-                heard = y * r.amp * (r.oddCycle ? growlLow : growlHigh);
-            }
+            const float heard = applyRasp (y, prev[ci], ch, ci);
             before = prev[ci];
             prev[ci] = y;
             acc[ci] += y * y;
@@ -326,6 +362,7 @@ private:
         cur.character = target.character;
         cur.autoGain = target.autoGain;
         cur.limiter = target.limiter;
+        cur.cut = target.cut;
     }
 
     void updateAutoGain() noexcept
@@ -354,9 +391,10 @@ private:
             const auto ci = (size_t) c;
             snapshot.freq[ci].store (cellFreqNow[ci], relaxed);
             snapshot.q[ci].store (cellQ[ci], relaxed);
-            snapshot.level[ci].store (cellGain[ci] * levelMod[ci], relaxed);
+            snapshot.level[ci].store (cutMode ? std::min (1.0f, cellGain[ci] * levelMod[ci]) : cellGain[ci] * levelMod[ci], relaxed);
         }
         snapshot.activeCells.store (activeCells, relaxed);
+        snapshot.cut.store (cutMode, relaxed);
         snapshot.norm.store (fieldNorm, relaxed);
         snapshot.post.store (makeup * agGain, relaxed);
         snapshot.feedback.store (fbGain, relaxed);
@@ -386,6 +424,15 @@ private:
 
     // Resonance → bandwidth factor: 0.6 = the table's bandwidths, 0 = 12x wider, 1 = ~5x narrower.
     static float bandwidthScale (float r) noexcept { return std::exp2 ((0.6f - std::clamp (r, 0.0f, 1.0f)) * 6.0f); }
+
+    // Cut mode: Resonance → the field's deepest cut, 12 dB (wide, gentle) … 48 dB (narrow, deep).
+    // A cell's depth is its share of that, as a linear depth (cell = in - depth × band).
+    static float cutDepth (float share, float resonance) noexcept
+    {
+        const float maxCutDb = 12.0f + 36.0f * std::clamp (resonance, 0.0f, 1.0f);
+        return 1.0f - std::pow (10.0f, -std::max (0.0f, share) * maxCutDb / 20.0f);
+    }
+    static constexpr float maxCutFeedback = 0.75f;
 
     static constexpr float minQ = 0.5f, maxQ = 64.0f;
     static constexpr float maxDetuneOct = 1.0f / 6.0f;   // widest spread of one formant's cells
@@ -442,7 +489,9 @@ private:
         }
     }
 
-    struct Placement { float octs, q, gainDb; };
+    // cutShare: in cut mode, the share of the field's deepest cut this cell digs (dB-additive, so a
+    // formant's cells split it between them; quieter formants cut less deeply).
+    struct Placement { float octs, q, gainDb, cutShare; };
 
     // Where cell c sits for a vowel position, shift, bandwidth factor and scatter amount.
     Placement place (int c, float vowel, float shiftOct, float bwScale, float scatter) const noexcept
@@ -477,6 +526,7 @@ private:
         const float formantQ = std::clamp (0.64f * fm.hz / bw, minQ, maxQ);
         // Louder formants have more cells; share the formant's level between them.
         const float formantDb = fm.gainDb - 10.0f * std::log10 ((float) cellsInFormant[(size_t) k]);
+        const float formantCut = std::pow (10.0f, fm.gainDb / 40.0f) / (float) cellsInFormant[(size_t) k];
 
         float freePos = tr.freePos + 0.5f * lifeDepth * lf.freeShift;   // scattered: anywhere
         freePos -= std::floor (freePos);
@@ -486,7 +536,8 @@ private:
         const float s = std::clamp (scatter, 0.0f, 1.0f);
         return { formantOct + (freeOct - formantOct) * s + shiftOct,
                  std::exp2 (std::log2 (formantQ) + (std::log2 (freeQ) - std::log2 (formantQ)) * s),
-                 formantDb + (tr.freeGainDb - formantDb) * s };
+                 formantDb + (tr.freeGainDb - formantDb) * s,
+                 formantCut + (std::pow (10.0f, tr.freeGainDb / 40.0f) - formantCut) * s };
     }
 
     // Coupling, control rate: each cell's energy (its output level, ~20 ms) relative to the field's
@@ -712,7 +763,18 @@ private:
 
         // Broken: coefficients only update every 8th tick, so movement steps instead of gliding.
         const bool broken = cur.character == Character::Broken;
-        const bool updateCoefficients = ! broken || (tickCounter++ % 8) == 0;
+
+        // Switching between boost and cut changes the topology (parallel / series): start clean.
+        const bool modeChanged = cur.cut != cutMode;
+        if (modeChanged)
+        {
+            cutMode = cur.cut;
+            for (auto& ch : cells) for (auto& c : ch) c.reset();
+            for (auto& ch : lastOut) ch.fill (0.0f);
+            fbState.fill (0.0f); dampState.fill (0.0f);
+            normCounter = 0; makeupCounter = 0;
+        }
+        const bool updateCoefficients = modeChanged || ! broken || (tickCounter++ % 8) == 0;
 
         const int newCount = std::clamp (cur.density, 1, maxCells);
         for (int c = activeCells; c < newCount; ++c)   // newly woken cells start silent
@@ -749,7 +811,12 @@ private:
             const float f = std::exp2 (base.octs);
             cellFreq[ci] = f;
             // Cells pushed above the usable range fade out instead of piling up at Nyquist.
-            targetGain[ci] = f < maxHz ? std::pow (10.0f, base.gainDb / 20.0f) * excitedGain[ci] : 0.0f;
+            // Cut mode: the gain is the cut depth (0..1); excitation digs deeper, Resonance (with its
+            // per-cell modulation) sets how deep the field cuts as well as how narrow.
+            const float resOff = mod.cell (ModTarget::Resonance, c);
+            targetGain[ci] = f >= maxHz ? 0.0f
+                           : cutMode ? cutDepth (base.cutShare * excitedGain[ci], cur.resonance + resOff)
+                                     : std::pow (10.0f, base.gainDb / 20.0f) * excitedGain[ci];
             levelMod[ci] = 1.0f - lifeDepth * (1.0f - life[ci].vitality);
 
             if (! updateCoefficients)
@@ -757,7 +824,6 @@ private:
 
             // Per-cell modulation.
             const float vowelOff = mod.cell (ModTarget::Vowel, c);
-            const float resOff = mod.cell (ModTarget::Resonance, c);
             const float scatterOff = mod.cell (ModTarget::Scatter, c);
             const auto pl = (vowelOff == 0.0f && resOff == 0.0f && scatterOff == 0.0f)
                 ? base
@@ -783,12 +849,25 @@ private:
         }
 
         for (int c = 0; c < activeCells; ++c)
-            cellGain[(size_t) c] += (targetGain[(size_t) c] - cellGain[(size_t) c]) * smoothCoef;
+            cellGain[(size_t) c] = modeChanged ? targetGain[(size_t) c]
+                                               : cellGain[(size_t) c] + (targetGain[(size_t) c] - cellGain[(size_t) c]) * smoothCoef;
+
+        // Cut mode: no norm (the cuts never boost) and no makeup lift, only the feedback's low end
+        // taken back (see below).
+        if (cutMode)
+        {
+            for (int c = 0; c < activeCells; ++c)
+                cutStage[(size_t) c] = FluxCell::stageDepthFor (cellGain[(size_t) c] * levelMod[(size_t) c]);
+            fieldNorm = 1.0f;
+            makeupTarget = std::sqrt (1.0f - maxCutFeedback * std::clamp (e.feedback, 0.0f, 1.0f));
+            if (modeChanged)
+                makeup = makeupTarget;
+        }
 
         // Level: a filter must never amplify. Find the field's loudest point (every cell centre plus
         // one octave beyond each end, summing all cells as magnitudes) and scale it to unity.
         // Recomputed every 4th tick; drops at once, recovers smoothly.
-        if (updateCoefficients && (normCounter++ % 4) == 0)
+        if (! cutMode && updateCoefficients && (normCounter++ % 4) == 0)
         {
             // Life: the living cells are normalised (the population's level stays even as cells die),
             // but by at most +12 dB over the full field, so a dying population still fades out.
@@ -822,7 +901,7 @@ private:
         // (equal energy per octave, 20 Hz–20 kHz) gets through and bring that up to 3 dB under the
         // input, by at most +12 dB, so a tone on a formant peak is never more than 12 dB louder than
         // it came in (Auto Gain and the limiter catch the rest). Applied after the feedback loop.
-        if (updateCoefficients && (makeupCounter++ % 16) == 0)
+        if (! cutMode && updateCoefficients && (makeupCounter++ % 16) == 0)
         {
             float pinkEnergy = 0.0f;
             for (int i = 0; i < makeupPoints; ++i)
@@ -842,7 +921,10 @@ private:
 
         // Feedback goes above unity at the top so the field can sing on its own;
         // the saturation in the loop and in the cells keeps that bounded.
-        fbGain = 1.35f * e.feedback;   // the field peaks just under unity, so the top of the range self-oscillates
+        // Cut mode: the field passes almost everything at unity, so feedback stays below 1 (it would
+        // only howl). It lifts what the cells leave (by up to 1 / (1 - 0.75) at the low end, half of
+        // it taken back by the makeup), so the notches read deeper against the rest.
+        fbGain = (cutMode ? maxCutFeedback : 1.35f) * e.feedback;   // boost: the field peaks just under unity, so the top self-oscillates
         dampHz = std::min (20000.0f * std::exp2 (-e.damping * 5.3f), maxHz);
         dampCoef = 1.0f - std::exp (-2.0f * 3.14159265f * dampHz / sampleRate);
 
@@ -869,6 +951,22 @@ public:
             sum += level (c) * stage * stage;
         }
         return sum;
+    }
+
+    // Cut mode: the cells in series, each two single-stage notches: the product of (1 - d × stage)²,
+    // d = the per-stage depth for depth (c).
+    template <typename Depth>
+    static std::complex<float> cutResponse (float hz, int numCells, const float* freq, const float* q, Depth&& depth) noexcept
+    {
+        std::complex<float> prod { 1.0f, 0.0f };
+        for (int c = 0; c < numCells; ++c)
+        {
+            const float x = hz / freq[c], k = 1.0f / q[c];
+            const std::complex<float> stage = std::complex<float> (0.0f, k * x) / std::complex<float> (1.0f - x * x, k * x);
+            const auto notch = 1.0f - FluxCell::stageDepthFor (depth (c)) * stage;
+            prod *= notch * notch;
+        }
+        return prod;
     }
 
 private:
@@ -903,6 +1001,8 @@ private:
     std::array<float, maxCells> spreadPos {};
 
     float fieldNorm = 1.0f;
+    bool  cutMode = false;
+    std::array<float, maxCells> cutStage {};   // cut mode: each cell's per-stage depth (life included)
 
     // Life: chaotic drift
     static constexpr float maxVowelWander = 2.0f;        // ring positions (shapes) either way

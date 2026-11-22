@@ -57,12 +57,13 @@ int main()
     {
         std::mt19937 rng (7); std::uniform_real_distribution<float> u (0.0f, 1.0f);
         float worstUnlimited = 0.0f;
+        for (bool cut : { false, true })
         for (int character = 0; character < 3; ++character)
             for (bool limiter : { true, false })
             for (int density : { 1, 7, 24 })
             {
                 FluxField f; FieldSettings s;
-                s.density = density; s.resonance = 1.0f; s.driveDb = 24.0f;
+                s.cut = cut; s.density = density; s.resonance = 1.0f; s.driveDb = 24.0f;
                 s.character = (Character) character; s.limiter = limiter;
                 s.feedback = 1.0f; s.damping = 0.0f;
                 s.fluxAmount = 1.0f; s.wander = 1.0f; s.macroOverride.driftHz = 5.0f; s.macroOverride.coupling = 1.0f; s.rasp = 1.0f;
@@ -76,6 +77,7 @@ int main()
                     s.shiftOct = 2.0f - 4.0f * u (rng);
                     s.scatter = u (rng);
                     s.resonance = u (rng);
+                    if (u (rng) < 0.01f) s.cut = ! s.cut;   // the topology switches mid-stream now and then
                     f.setSettings (s);
                     f.process (l.data() + i, r.data() + i, 64);
                 }
@@ -90,7 +92,7 @@ int main()
                 else
                     CHECK (peak <= 4.001f, "wet ceiling broken, level %.2f (char %d, density %d)", peak, character, density);
             }
-        std::printf ("stress: 18 extreme combinations finite, limiter holds; worst peak without limiter %.2f\n", worstUnlimited);
+        std::printf ("stress: 36 extreme combinations (boost and cut) finite, limiter holds; worst peak without limiter %.2f\n", worstUnlimited);
     }
 
     // Field after one control tick, for checking the layout.
@@ -536,6 +538,60 @@ int main()
         auto w = noise (48000, 0.3f); w.resize (48000 * 4, 0.0f); run (g, w, nullptr);
         double tail0 = 0.0; for (size_t i = 48000 * 3; i < w.size(); ++i) tail0 += (double) w[i] * w[i];
         CHECK (tail0 < 1e-6, "tail without feedback should die out (%.8f)", tail0);
+    }
+
+    // 8. Cut mode: every cell is a notch, the field never boosts.
+    {
+        FieldSettings s; s.cut = true; s.autoGain = false; s.limiter = false; s.fluxAmount = 0.0f; s.character = Character::Clean;
+        auto gainAt = [&] (FieldSettings d, float hz) {
+            FluxField f; f.setSettings (d); f.prepare (sr);
+            auto v = sine (48000, hz, 0.25f);
+            run (f, v, nullptr);
+            return (float) (20.0 * std::log10 (rmsTail (v) / (0.25 / std::sqrt (2.0)) + 1e-12));
+        };
+
+        auto centreOf = [] (FieldSettings d) {
+            FluxField probe; probe.setSettings (d); probe.prepare (sr);
+            std::vector<float> tmp (64, 0.0f); probe.process (tmp.data(), nullptr, 64);
+            return probe.getCellFrequencyNow (0);
+        };
+
+        // One cell: a deep notch at its centre, untouched two octaves away.
+        FieldSettings one = s; one.density = 1;
+        const float centre = centreOf (one);
+        const float atCentre = gainAt (one, centre), far = gainAt (one, centre * 4.0f);
+        std::printf ("cut, one cell at %.0f Hz: %.1f dB at the centre, %.2f dB two octaves up\n", centre, atCentre, far);
+        CHECK (atCentre < -25.0f, "cut notch too shallow (%.1f dB)", atCentre);
+        CHECK (std::abs (far) < 1.0f, "cut changes the sound away from the notch (%.2f dB)", far);
+
+        // Deeper with more Resonance.
+        FieldSettings deep = one; deep.resonance = 1.0f;
+        FieldSettings shallow = one; shallow.resonance = 0.0f;
+        const float dDeep = gainAt (deep, centreOf (deep)), dShallow = gainAt (shallow, centreOf (shallow));
+        std::printf ("cut depth: %.1f dB at Resonance 0, %.1f dB at Resonance 1\n", dShallow, dDeep);
+        CHECK (dDeep < dShallow - 10.0f, "Resonance should deepen the cut (%.1f vs %.1f dB)", dDeep, dShallow);
+
+        // A full field never lifts a tone by more than a couple of dB anywhere (sweep 50 Hz…12 kHz).
+        FieldSettings full = s; full.density = 16;
+        float worst = -100.0f, deepest = 0.0f;
+        for (float hz = 50.0f; hz < 12000.0f; hz *= 1.04f)
+        {
+            const float g = gainAt (full, hz);
+            worst = std::max (worst, g);
+            deepest = std::min (deepest, g);
+        }
+        std::printf ("cut, 16 cells: loudest point %+.2f dB, deepest %.1f dB\n", worst, deepest);
+        CHECK (worst < 0.3f, "cut field boosts by %.2f dB", worst);
+        CHECK (deepest < -20.0f, "cut field has no deep notch (%.1f dB)", deepest);
+
+        // Feedback in cut mode never self-oscillates: the tail dies.
+        FieldSettings fb = full; fb.feedback = 1.0f; fb.damping = 0.0f; fb.resonance = 1.0f;
+        FluxField f; f.setSettings (fb); f.prepare (sr);
+        auto v = noise (48000, 0.3f); v.resize (48000 * 3, 0.0f);
+        const auto res = run (f, v, nullptr);
+        double tail = 0.0; for (size_t i = 48000 * 2; i < v.size(); ++i) tail += (double) v[i] * v[i];
+        std::printf ("cut, feedback 1.0: tail energy %.2e, peak %.2f\n", tail, res.peak);
+        CHECK (res.finite && tail < 1e-6, "cut mode feedback should not sustain (%.8f)", tail);
     }
 
     std::printf (failures == 0 ? "ALL PASSED\n" : "%d FAILURE(S)\n", failures);

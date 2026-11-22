@@ -65,7 +65,7 @@ inline const std::array<FloatSpec, (size_t) FP::Count>& floats()
         { "wander",     "Wander",          0.0f,  1.0f,     0.5f },                          // how far the chaos roams
         { "rasp",       "Rasp",            0.0f,  1.0f,     0.0f },                          // throat roughness: jitter + growl
         { "drive",      "Drive",           0.0f,  24.0f,    0.0f,   0.0f,   0.01f, "dB" },
-        { "mix",        "Mix",             0.0f,  1.0f,     0.5f },
+        { "mix",        "Mix",             0.0f,  1.0f,     1.0f },                          // full wet: dry signal would fill the cut mode's notches back in
         { "output",     "Gain",            -24.0f, 24.0f,   0.0f,   0.0f,   0.01f, "dB" },
 
         { "lfo1Rate",   "LFO 1 Rate",      0.01f, 30.0f,    0.5f,   1.0f,   0.0f,  "Hz" },

@@ -3,6 +3,18 @@
 All notable changes to flux_filter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Sound
+- **Cut mode** (new default): every cell carves a notch out of the sound instead of adding a peak.
+  The cells run in series, so the field never boosts; overlapping cells dig deeper, wider troughs,
+  and a dying cell lets its band back in. In cut mode Resonance sets how deep the notches go
+  (12 to 48 dB) as well as how narrow they are, and Feedback stays below self-oscillation.
+  Switch between **Cut** and **Boost** on the left of the header.
+- Mix defaults to 100 % (with a dry signal mixed in, a notch can't go deeper than about 6 dB).
+- New factory presets for cut mode: Phase Ghost, Hollow Vowel, Comb Garden, Notch Swarm. The
+  existing presets use Boost and keep their 50 % mix.
+
 ## [1.0.0] - 2026-11-22
 
 The first public release.

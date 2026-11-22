@@ -86,6 +86,20 @@ public:
         return stage<false> (second, c2, 1.0f, stage<true> (first, c1, lpHpScale, v0));
     }
 
+    // Cut (bandpass morph only): each stage removes its band from what it is given,
+    // y = in - stageDepth × band, the two in series. A single stage's band response lies on a circle
+    // through 0 and 1, so |1 - d × band| <= 1 everywhere: the cell never boosts, only notches, by
+    // (1 - stageDepth)² at the centre. band: the first stage's band output (what the cell hears).
+    float processCut (float v0, float stageDepth, float& band) noexcept
+    {
+        band = stage<true> (first, c1, lpHpScale, v0);
+        const float y1 = v0 - stageDepth * band;
+        return y1 - stageDepth * stage<false> (second, c2, 1.0f, y1);
+    }
+
+    // Per-stage depth for a cell that cuts by `depth` (0..1) at its centre: 1 - sqrt (1 - depth).
+    static float stageDepthFor (float depth) noexcept { return 1.0f - std::sqrt (1.0f - std::clamp (depth, 0.0f, 1.0f)); }
+
 private:
     struct Coeffs
     {

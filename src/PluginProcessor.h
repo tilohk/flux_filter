@@ -73,6 +73,7 @@ private:
 
     // Cached raw parameter pointers (read on the audio thread without lookups).
     std::array<std::atomic<float>*, (size_t) flux::spec::FP::Count> floatParams {};
+    std::atomic<float>* pCut = nullptr;
     std::atomic<float>* pDensity = nullptr;
     std::atomic<float>* pCharacter = nullptr;
     std::atomic<float>* pAutoGain = nullptr;

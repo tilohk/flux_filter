@@ -20,6 +20,7 @@ FluxFilterAudioProcessor::FluxFilterAudioProcessor()
     for (size_t i = 0; i < floatParams.size(); ++i)
         floatParams[i] = get (spec::floats()[i].id);
 
+    pCut       = get (params::id::cut);
     pDensity   = get (params::id::density);
     pCharacter = get (params::id::character);
     pAutoGain  = get (params::id::autoGain);
@@ -59,6 +60,7 @@ void FluxFilterAudioProcessor::releaseResources() {}
 FieldSettings FluxFilterAudioProcessor::readSettings() const noexcept
 {
     FieldSettings s;
+    s.cut       = pCut->load() > 0.5f;
     s.density   = (int) pDensity->load();
     s.vowel     = value (FP::Vowel);
     s.shiftOct  = value (FP::Shift);
